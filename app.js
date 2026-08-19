@@ -69,6 +69,11 @@ function visibleItems() {
   const catIds = visibleCategories().map((c) => c.id);
   return state.items.filter((it) => catIds.includes(it.category));
 }
+function itemLabelsForCategory(categoryId) {
+  const refPatient = state.patients[0];
+  if (!refPatient) return [];
+  return state.items.filter((it) => it.linkType === "patient" && it.linkId === refPatient.id && it.category === categoryId).map((it) => it.label);
+}
 function itemLinkLabel(item) {
   if (item.linkType === "patient") {
     const p = state.patients.find((x) => x.id === item.linkId);
@@ -337,37 +342,92 @@ function renderNachkontrolleBlock(item) {
   </div>`;
 }
 
+function cellDisplay(item) {
+  const today = todayStr();
+  if (isFullyDone(item)) return { symbol: "✓", cls: "mx-done" };
+  if (item.status === "done") return { symbol: "✓", cls: "mx-pending" };
+  if (item.status === "in_progress") return { symbol: "◐", cls: "mx-progress" };
+  if (item.deadline < today) return { symbol: "!", cls: "mx-overdue" };
+  return { symbol: "·", cls: "mx-open" };
+}
+
 function renderPatients() {
   const wrap = document.createElement("div");
-  wrap.innerHTML = `<div class="page-header"><div><h1>Patienten</h1><div class="page-sub">${state.patients.length} Patienten (Beispieldaten)</div></div></div>`;
-  const tableWrap = document.createElement("div");
-  tableWrap.className = "table-wrap";
-  tableWrap.innerHTML = `
-    <table>
-      <thead><tr><th>Name</th><th>Pflegegrad</th><th>Status</th><th>Aktenstatus</th></tr></thead>
-      <tbody>
-        ${state.patients
-          .map((p) => {
-            const agg = computeAggregateStatus(p.id);
-            return `<tr data-patient="${p.id}">
-              <td>${p.name}</td>
-              <td>${p.pflegegrad}</td>
-              <td>${p.active ? "Aktiv" : "Inaktiv"}</td>
-              <td><span class="akte-pill akte-${agg}">${AGGREGATE_LABEL[agg]}</span></td>
-            </tr>`;
-          })
-          .join("")}
-      </tbody>
-    </table>
+  wrap.innerHTML = `<div class="page-header"><div><h1>Patienten</h1><div class="page-sub">${state.patients.length} Patienten · Matrixansicht van de Patientenakte, klik een cel voor details</div></div></div>`;
+
+  const akteLabels = itemLabelsForCategory("akte");
+  const verwLabels = itemLabelsForCategory("verwaltung");
+
+  const matrixWrap = document.createElement("div");
+  matrixWrap.className = "matrix-scroll";
+
+  const groupRow = `
+    <tr class="group-row">
+      <th class="corner"></th>
+      <th colspan="${akteLabels.length}">Patientenakte</th>
+      <th colspan="${verwLabels.length}">Verwaltung / Abrechnung</th>
+      <th class="status-col" rowspan="2">Aktenstatus</th>
+    </tr>`;
+  const labelRow = `
+    <tr class="label-row">
+      <th class="corner" style="position:sticky;left:0;top:28px;z-index:3;"></th>
+      ${[...akteLabels, ...verwLabels].map((l) => `<th title="${l}"><span class="rot">${l}</span></th>`).join("")}
+    </tr>`;
+
+  const bodyRows = state.patients
+    .map((p) => {
+      const cells = [...akteLabels, ...verwLabels]
+        .map((label, i) => {
+          const cat = i < akteLabels.length ? "akte" : "verwaltung";
+          const item = state.items.find((it) => it.linkType === "patient" && it.linkId === p.id && it.category === cat && it.label === label);
+          if (!item) return `<td class="cell">–</td>`;
+          const d = cellDisplay(item);
+          const dl = deadlineInfo(item.deadline, item.status);
+          const titleTxt = `${item.label} · ${statusLabel(item.status)} · Frist ${fmtDate(item.deadline)} · ${item.assignees.map(userLabel).join(", ")}${item.status === "done" && !item.nachkontrolleDone ? " · Nachkontrolle ausstehend" : ""}`;
+          return `<td class="cell"><button class="mx-btn ${d.cls}" data-item="${item.id}" title="${titleTxt}">${d.symbol}</button></td>`;
+        })
+        .join("");
+      const agg = computeAggregateStatus(p.id);
+      return `<tr>
+        <td class="name-cell" data-patient="${p.id}">
+          <span class="pname">${p.name}</span>
+          <span class="psub">${p.pflegegrad} · ${p.active ? "aktiv" : "inaktiv"}</span>
+        </td>
+        ${cells}
+        <td class="status-col"><span class="akte-pill akte-${agg}">${AGGREGATE_LABEL[agg]}</span></td>
+      </tr>`;
+    })
+    .join("");
+
+  matrixWrap.innerHTML = `<table class="matrix"><thead>${groupRow}${labelRow}</thead><tbody>${bodyRows}</tbody></table>`;
+  wrap.appendChild(matrixWrap);
+
+  const legend = document.createElement("div");
+  legend.className = "matrix-legend";
+  legend.innerHTML = `
+    <span><span class="mx-done">✓</span> Abgeschlossen</span>
+    <span><span class="mx-pending">✓</span> Nachkontrolle ausstehend</span>
+    <span><span class="mx-progress">◐</span> In Bearbeitung</span>
+    <span><span class="mx-overdue">!</span> Offen, Frist überschritten</span>
+    <span><span class="mx-open">·</span> Offen</span>
   `;
-  wrap.appendChild(tableWrap);
-  wrap.querySelectorAll("[data-patient]").forEach((row) =>
-    row.addEventListener("click", () => {
-      activeFilters = { quick: null, patient: row.dataset.patient, category: "", assignee: "", status: "" };
+  wrap.appendChild(legend);
+
+  matrixWrap.querySelectorAll("[data-patient]").forEach((cell) =>
+    cell.addEventListener("click", () => {
+      activeFilters = { quick: null, patient: cell.dataset.patient, category: "", assignee: "", status: "" };
       route = "checklist";
       render();
     })
   );
+  matrixWrap.querySelectorAll("[data-item]").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openItemId = btn.dataset.item;
+      render();
+    })
+  );
+
   return wrap;
 }
 
