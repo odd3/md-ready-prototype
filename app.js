@@ -10,7 +10,10 @@ function loadState() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) {
     try {
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (parsed.version === SEED_VERSION) return parsed;
+      // Nieuwe seed-versie beschikbaar: eerdere handmatige wijzigingen van
+      // deze bezoeker vervallen, zodat iedereen de actuele voorbeelddata ziet.
     } catch (e) {
       /* fall through to reseed */
     }

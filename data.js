@@ -1,5 +1,10 @@
 /* MD-READY Prototyp — Beispieldaten (rein fiktiv, keine echten Patienten/Mitarbeiter) */
 
+// Ophogen bij elke wijziging aan de seed-data: bij een mismatch met de
+// opgeslagen localStorage-versie wordt automatisch opnieuw geseed, zodat
+// bezoekers na een update niet handmatig "Demo zurücksetzen" hoeven te klikken.
+const SEED_VERSION = 2;
+
 function daysFromNow(n) {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -166,6 +171,7 @@ function seedState() {
   }
 
   return {
+    version: SEED_VERSION,
     tenant: { name: "MD-READY Demo Pflegedienst" },
     currentUserId: "nasrat",
     users,
