@@ -5,6 +5,7 @@ let state = loadState();
 let route = "dashboard";
 let activeFilters = { quick: null, patient: "", category: "", assignee: "", status: "" };
 let openItemId = null;
+let modalState = null; // { kind: "patient-new" | "patient-edit" | "item-new", id? }
 
 function loadState() {
   const raw = localStorage.getItem(STORAGE_KEY);
@@ -117,6 +118,7 @@ function render() {
   app.appendChild(main);
 
   app.appendChild(renderOverlayAndPanel());
+  app.appendChild(renderModalPanel());
 }
 
 function renderSidebar() {
@@ -228,9 +230,20 @@ function renderChecklist() {
       <h1>Checkliste</h1>
       <div class="page-sub">${visibleItems().length} Punkte sichtbar</div>
     </div>
-    ${isAdmin() ? '<button class="btn primary" id="export-csv">Export (CSV)</button>' : ""}
+    <div style="display:flex;gap:8px;">
+      ${isAdmin() ? '<button class="btn" id="new-item-btn">+ Punkt hinzufügen</button>' : ""}
+      ${isAdmin() ? '<button class="btn primary" id="export-csv">Export (CSV)</button>' : ""}
+    </div>
   `;
   wrap.appendChild(header);
+  const newItemBtn = header.querySelector("#new-item-btn");
+  if (newItemBtn) {
+    newItemBtn.addEventListener("click", () => {
+      modalState = { kind: "item-new" };
+      openItemId = null;
+      render();
+    });
+  }
 
   const filterBar = document.createElement("div");
   filterBar.className = "filter-bar";
@@ -303,6 +316,7 @@ function renderChecklist() {
   wrap.querySelectorAll("[data-item]").forEach((row) =>
     row.addEventListener("click", () => {
       openItemId = row.dataset.item;
+      modalState = null;
       render();
     })
   );
@@ -369,7 +383,11 @@ function cellDisplay(item) {
 
 function renderPatients() {
   const wrap = document.createElement("div");
-  wrap.innerHTML = `<div class="page-header"><div><h1>Patienten</h1><div class="page-sub">${state.patients.length} Patienten · Matrixansicht van de Patientenakte, klik een cel voor details</div></div></div>`;
+  wrap.innerHTML = `
+    <div class="page-header">
+      <div><h1>Patienten</h1><div class="page-sub">${state.patients.length} Patienten · Matrixansicht van de Patientenakte, klik een cel voor details</div></div>
+      ${isAdmin() ? '<button class="btn primary" id="new-patient-btn">+ Neuer Patient</button>' : ""}
+    </div>`;
 
   const akteLabels = itemLabelsForCategory("akte");
   const verwLabels = itemLabelsForCategory("verwaltung");
@@ -380,14 +398,16 @@ function renderPatients() {
   const groupRow = `
     <tr class="group-row">
       <th class="corner"></th>
-      <th colspan="${akteLabels.length}">Patientenakte</th>
-      <th colspan="${verwLabels.length}">Verwaltung / Abrechnung</th>
+      <th class="col-akte" colspan="${akteLabels.length}">Patientenakte</th>
+      <th class="col-verwaltung" colspan="${verwLabels.length}">Verwaltung / Abrechnung</th>
       <th class="status-col" rowspan="2">Aktenstatus</th>
     </tr>`;
   const labelRow = `
     <tr class="label-row">
       <th class="corner" style="position:sticky;left:0;top:34px;z-index:3;"></th>
-      ${[...akteLabels, ...verwLabels].map((l) => `<th title="${l}"><span class="rot">${l}</span></th>`).join("")}
+      ${[...akteLabels, ...verwLabels]
+        .map((l, i) => `<th class="${i < akteLabels.length ? "col-akte" : "col-verwaltung"}" title="${l}"><span class="rot">${l}</span></th>`)
+        .join("")}
     </tr>`;
 
   const bodyRows = state.patients
@@ -396,11 +416,11 @@ function renderPatients() {
         .map((label, i) => {
           const cat = i < akteLabels.length ? "akte" : "verwaltung";
           const item = state.items.find((it) => it.linkType === "patient" && it.linkId === p.id && it.category === cat && it.label === label);
-          if (!item) return `<td class="cell">–</td>`;
+          if (!item) return `<td class="cell ${cat === "akte" ? "col-akte" : "col-verwaltung"}">–</td>`;
           const d = cellDisplay(item);
           const dl = deadlineInfo(item.deadline, item.status);
           const titleTxt = `${item.label} · ${statusLabel(item.status)} · Frist ${fmtDate(item.deadline)} · ${item.assignees.map(userLabel).join(", ")}${item.status === "done" && !item.nachkontrolleDone ? " · Nachkontrolle ausstehend" : ""}`;
-          return `<td class="cell"><button class="mx-btn ${d.cls}" data-item="${item.id}" title="${titleTxt}">${d.symbol}</button></td>`;
+          return `<td class="cell ${cat === "akte" ? "col-akte" : "col-verwaltung"}"><button class="mx-btn ${d.cls}" data-item="${item.id}" title="${titleTxt}">${d.symbol}</button></td>`;
         })
         .join("");
       const agg = computeAggregateStatus(p.id);
@@ -408,6 +428,7 @@ function renderPatients() {
         <td class="name-cell" data-patient="${p.id}">
           <span class="pname">${p.name}</span>
           <span class="psub">${p.pflegegrad} · ${p.active ? "aktiv" : "inaktiv"}</span>
+          ${isAdmin() ? `<button class="edit-btn" data-edit-patient="${p.id}" title="Patient bearbeiten">✎</button>` : ""}
         </td>
         ${cells}
         <td class="status-col"><span class="akte-pill akte-${agg}">${AGGREGATE_LABEL[agg]}</span></td>
@@ -440,9 +461,26 @@ function renderPatients() {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       openItemId = btn.dataset.item;
+      modalState = null;
       render();
     })
   );
+  matrixWrap.querySelectorAll("[data-edit-patient]").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      modalState = { kind: "patient-edit", id: btn.dataset.editPatient };
+      openItemId = null;
+      render();
+    })
+  );
+  const newPatientBtn = wrap.querySelector("#new-patient-btn");
+  if (newPatientBtn) {
+    newPatientBtn.addEventListener("click", () => {
+      modalState = { kind: "patient-new" };
+      openItemId = null;
+      render();
+    });
+  }
 
   return wrap;
 }
@@ -699,6 +737,139 @@ function addComment(item) {
   item.comments.push({ id: "c" + Date.now(), author: state.currentUserId, text, createdAt: todayStr() });
   saveState();
   render();
+}
+
+/* ---------------- Patiënt / checklistpunt toevoegen (Admin) ---------------- */
+
+const INPUT_STYLE = "width:100%;padding:8px 10px;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:13.5px;";
+let adhocCounter = 1;
+function nextAdhocId() {
+  return "x" + Date.now().toString(36) + adhocCounter++;
+}
+
+function addChecklistItemDefinition(categoryId, label) {
+  const cat = state.categories.find((c) => c.id === categoryId);
+  const targets = cat.scope === "patient" ? state.patients.map((p) => p.id) : cat.scope === "employee" ? state.users.map((u) => u.id) : [null];
+  const linkType = cat.scope === "patient" ? "patient" : cat.scope === "employee" ? "employee" : "org";
+  targets.forEach((linkId) => {
+    state.items.push(blankChecklistItem(nextAdhocId(), categoryId, label, linkType, linkId, state.currentUserId));
+  });
+  saveState();
+}
+
+function renderModalPanel() {
+  const frag = document.createElement("div");
+  if (!modalState || !isAdmin()) return frag;
+
+  const overlay = document.createElement("div");
+  overlay.className = "overlay open";
+  overlay.addEventListener("click", () => {
+    modalState = null;
+    render();
+  });
+  frag.appendChild(overlay);
+
+  const panel = document.createElement("div");
+  panel.className = "panel open";
+  panel.innerHTML = modalState.kind === "item-new" ? newItemFormHtml() : patientFormHtml(modalState.kind === "patient-edit" ? state.patients.find((p) => p.id === modalState.id) : null);
+  frag.appendChild(panel);
+
+  const closeBtn = panel.querySelector("#modal-close");
+  if (closeBtn)
+    closeBtn.addEventListener("click", () => {
+      modalState = null;
+      render();
+    });
+
+  const pfSubmit = panel.querySelector("#pf-submit");
+  if (pfSubmit) {
+    pfSubmit.addEventListener("click", () => {
+      const name = panel.querySelector("#pf-name").value.trim();
+      if (!name) return;
+      const pflegegrad = panel.querySelector("#pf-pflegegrad").value;
+      const active = panel.querySelector("#pf-active").value === "true";
+      if (modalState.kind === "patient-edit") {
+        const p = state.patients.find((x) => x.id === modalState.id);
+        p.name = name;
+        p.pflegegrad = pflegegrad;
+        p.active = active;
+      } else {
+        const id = "p" + Date.now().toString(36);
+        state.patients.push({ id, name, pflegegrad, active });
+        state.items.push(...createPatientChecklistItems(id, state.currentUserId));
+      }
+      saveState();
+      modalState = null;
+      render();
+    });
+  }
+
+  const ifSubmit = panel.querySelector("#if-submit");
+  if (ifSubmit) {
+    ifSubmit.addEventListener("click", () => {
+      const categoryId = panel.querySelector("#if-category").value;
+      const label = panel.querySelector("#if-label").value.trim();
+      if (!label) return;
+      addChecklistItemDefinition(categoryId, label);
+      modalState = null;
+      render();
+    });
+  }
+
+  return frag;
+}
+
+function patientFormHtml(existing) {
+  const isEdit = !!existing;
+  const pgOptions = ["PG 1", "PG 2", "PG 3", "PG 4", "PG 5", "kein PG"];
+  return `
+    <div class="panel-header">
+      <div><h2>${isEdit ? "Patient bearbeiten" : "Neuer Patient"}</h2><div class="page-sub">${isEdit ? existing.name : "Legt automatisch de standaard Patientenakte- en Verwaltungspunten aan"}</div></div>
+      <button class="panel-close" id="modal-close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="field-row">
+        <span class="field-label">Name</span>
+        <input type="text" id="pf-name" value="${isEdit ? existing.name : ""}" style="${INPUT_STYLE}" placeholder="Vor- und Nachname" />
+      </div>
+      <div class="field-row">
+        <span class="field-label">Pflegegrad</span>
+        <select id="pf-pflegegrad" style="${INPUT_STYLE}">
+          ${pgOptions.map((pg) => `<option value="${pg}" ${isEdit && existing.pflegegrad === pg ? "selected" : ""}>${pg}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Status</span>
+        <select id="pf-active" style="${INPUT_STYLE}">
+          <option value="true" ${!isEdit || existing.active ? "selected" : ""}>Aktiv</option>
+          <option value="false" ${isEdit && !existing.active ? "selected" : ""}>Inaktiv</option>
+        </select>
+      </div>
+      <button class="btn primary" id="pf-submit">${isEdit ? "Speichern" : "Patient anlegen"}</button>
+    </div>
+  `;
+}
+
+function newItemFormHtml() {
+  return `
+    <div class="panel-header">
+      <div><h2>Neuer Checklistpunkt</h2><div class="page-sub">Wordt toegevoegd voor alle bestaande patiënten/medewerkers in deze categorie</div></div>
+      <button class="panel-close" id="modal-close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="field-row">
+        <span class="field-label">Kategorie</span>
+        <select id="if-category" style="${INPUT_STYLE}">
+          ${state.categories.map((c) => `<option value="${c.id}">${c.label}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Bezeichnung</span>
+        <input type="text" id="if-label" placeholder="z. B. Sturzrisiko-Assessment" style="${INPUT_STYLE}" />
+      </div>
+      <button class="btn primary" id="if-submit">Punkt hinzufügen</button>
+    </div>
+  `;
 }
 
 /* ---------------- CSV export ---------------- */

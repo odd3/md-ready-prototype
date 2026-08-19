@@ -12,6 +12,52 @@ function daysFromNow(n) {
   return d.toISOString().slice(0, 10);
 }
 
+// Op moduleniveau (i.p.v. binnen seedState) zodat ook nieuw aangemaakte
+// patiënten/checklistpunten dezelfde standaard Patientenakte/Verwaltung-
+// structuur krijgen.
+const ITEM_DEFS = {
+  akte: ["SIS", "Maßnahmenplan", "Risikoeinschätzung", "Pflegebericht", "Pflegevisite", "Medikamentenplan"],
+  verwaltung: ["Verordnung", "Genehmigung", "Vertrag", "Kostenvoranschlag", "Leistungsnachweis", "Rechnung"],
+  personal: ["Vertrag", "Zertifikat", "Führungszeugnis", "Einarbeitung dokumentiert", "Datenschutzerklärung"],
+  qm: ["Pflegeleitbild", "Organigramm", "Fortbildungskonzept", "Notfallkonzept"],
+  hygiene: ["Hygieneplan", "Desinfektionsplan", "Schutzausrüstung geprüft", "MRSA-Verfahrensanweisung"],
+};
+
+function blankChecklistItem(id, category, label, linkType, linkId, assigneeId) {
+  return {
+    id,
+    category,
+    label,
+    status: "open",
+    priority: "normal",
+    deadline: daysFromNow(14),
+    assignees: assigneeId ? [assigneeId] : [],
+    linkType,
+    linkId,
+    createdAt: daysFromNow(0),
+    updatedAt: daysFromNow(0),
+    completedAt: null,
+    completedBy: null,
+    nachkontrolleRequired: true,
+    nachkontrolleDone: false,
+    nachkontrolleBy: null,
+    nachkontrolleAt: null,
+    comments: [],
+    history: [],
+  };
+}
+
+// Standaard Patientenakte- + Verwaltungspunten voor een nieuw aangemaakte patiënt.
+function createPatientChecklistItems(patientId, assigneeId) {
+  const items = [];
+  ["akte", "verwaltung"].forEach((cat) => {
+    ITEM_DEFS[cat].forEach((label, idx) => {
+      items.push(blankChecklistItem("np" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), cat, label, "patient", patientId, assigneeId));
+    });
+  });
+  return items;
+}
+
 function seedState() {
   const users = [
     { id: "nasrat", name: "Nasrat", role: "admin", roleLabel: "Pflegedienst Admin", initials: "NA" },
@@ -48,13 +94,7 @@ function seedState() {
     { id: "hygiene", label: "Hygiene", scope: "org", team: null },
   ];
 
-  const itemDefs = {
-    akte: ["SIS", "Maßnahmenplan", "Risikoeinschätzung", "Pflegebericht", "Pflegevisite", "Medikamentenplan"],
-    verwaltung: ["Verordnung", "Genehmigung", "Vertrag", "Kostenvoranschlag", "Leistungsnachweis", "Rechnung"],
-    personal: ["Vertrag", "Zertifikat", "Führungszeugnis", "Einarbeitung dokumentiert", "Datenschutzerklärung"],
-    qm: ["Pflegeleitbild", "Organigramm", "Fortbildungskonzept", "Notfallkonzept"],
-    hygiene: ["Hygieneplan", "Desinfektionsplan", "Schutzausrüstung geprüft", "MRSA-Verfahrensanweisung"],
-  };
+  const itemDefs = ITEM_DEFS;
 
   let itemId = 1;
   const items = [];
