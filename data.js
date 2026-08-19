@@ -3,7 +3,7 @@
 // Ophogen bij elke wijziging aan de seed-data: bij een mismatch met de
 // opgeslagen localStorage-versie wordt automatisch opnieuw geseed, zodat
 // bezoekers na een update niet handmatig "Demo zurücksetzen" hoeven te klikken.
-const SEED_VERSION = 4;
+const SEED_VERSION = 5;
 
 function daysFromNow(n) {
   const d = new Date();
@@ -59,6 +59,17 @@ function seedState() {
   let itemId = 1;
   const items = [];
   const assignPool = users.map((u) => u.id);
+
+  // Vier-Augen-Prinzip: kiest een andere collega dan wie het punt afrondde
+  // om de Nachkontrolle te doen — niet per se de Admin, gewoon wie er als
+  // volgende in de rij staat.
+  let nkCounter = 0;
+  function pickNachkontrolleBy(completedById) {
+    const others = users.filter((u) => u.id !== completedById);
+    const chosen = others[nkCounter % others.length].id;
+    nkCounter++;
+    return chosen;
+  }
 
   // Per-patient profile: controls the mix of status/deadline so the demo
   // shows all three aggregate outcomes (Vollständig / Korrektur / Dringend).
@@ -132,7 +143,7 @@ function seedState() {
     .filter((it) => (it.linkId === "p1" || it.linkId === "p10") && it.status === "done")
     .forEach((it) => {
       it.nachkontrolleDone = true;
-      it.nachkontrolleBy = it.completedBy === "nasrat" ? "michael" : "nasrat";
+      it.nachkontrolleBy = pickNachkontrolleBy(it.completedBy);
       it.nachkontrolleAt = daysFromNow(-1);
     });
   // Bij een paar andere afgeronde items laten we de Nachkontrolle bewust
@@ -142,7 +153,7 @@ function seedState() {
     .slice(0, 1)
     .forEach((it) => {
       it.nachkontrolleDone = true;
-      it.nachkontrolleBy = it.completedBy === "nasrat" ? "michael" : "nasrat";
+      it.nachkontrolleBy = pickNachkontrolleBy(it.completedBy);
       it.nachkontrolleAt = daysFromNow(-1);
     });
 
@@ -152,7 +163,7 @@ function seedState() {
     .filter((it) => ["personal", "qm", "hygiene"].includes(it.category) && it.status === "done")
     .forEach((it) => {
       it.nachkontrolleDone = true;
-      it.nachkontrolleBy = it.completedBy === "nasrat" ? "michael" : "nasrat";
+      it.nachkontrolleBy = pickNachkontrolleBy(it.completedBy);
       it.nachkontrolleAt = daysFromNow(-1);
     });
 
