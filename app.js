@@ -585,8 +585,10 @@ function renderOverlayAndPanel() {
           }
         </div>
         <div class="field-row">
-          <span class="field-label">Verantwortlich</span>
-          <span>${item.assignees.map((a) => userLabel(a)).join(", ")}</span>
+          <span class="field-label">Verantwortlich — klicken zum Zuweisen</span>
+          <div class="filter-bar" style="margin:0;">
+            ${state.users.map((u) => `<button class="chip ${item.assignees.includes(u.id) ? "active" : ""}" data-assignee="${u.id}">${u.name}</button>`).join("")}
+          </div>
         </div>
         ${item.completedAt ? `<div class="field-row"><span class="field-label">Abgeschlossen</span><span>${fmtDate(item.completedAt)} von ${userLabel(item.completedBy)}</span></div>` : ""}
         ${item.status === "done" && item.nachkontrolleRequired ? renderNachkontrolleBlock(item) : ""}
@@ -636,6 +638,23 @@ function renderOverlayAndPanel() {
         render();
       })
     );
+    panel.querySelectorAll("[data-assignee]").forEach((chip) =>
+      chip.addEventListener("click", () => {
+        const uid = chip.dataset.assignee;
+        const before = item.assignees.map(userLabel).join(", ") || "niemand";
+        if (item.assignees.includes(uid)) {
+          if (item.assignees.length === 1) return; // minstens één verantwoordelijke nodig
+          item.assignees = item.assignees.filter((a) => a !== uid);
+        } else {
+          item.assignees = [...item.assignees, uid];
+        }
+        const after = item.assignees.map(userLabel).join(", ") || "niemand";
+        logHistory(item, "assignee_changed", `${before} → ${after}`);
+        item.updatedAt = todayStr();
+        saveState();
+        render();
+      })
+    );
     const deadlineInput = panel.querySelector("#deadline-input");
     if (deadlineInput && isAdmin()) {
       deadlineInput.addEventListener("change", (e) => {
@@ -671,7 +690,7 @@ function renderOverlayAndPanel() {
 function logHistory(item, action, detail) {
   item.history.push({ id: "h" + Date.now() + Math.random().toString(16).slice(2), actor: state.currentUserId, action, detail, at: todayStr() });
 }
-const HISTORY_ACTION_LABEL = { deadline_changed: "Frist geändert" };
+const HISTORY_ACTION_LABEL = { deadline_changed: "Frist geändert", assignee_changed: "Verantwortlich geändert" };
 
 function addComment(item) {
   const input = document.getElementById("comment-input");

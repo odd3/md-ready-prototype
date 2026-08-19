@@ -3,7 +3,7 @@
 // Ophogen bij elke wijziging aan de seed-data: bij een mismatch met de
 // opgeslagen localStorage-versie wordt automatisch opnieuw geseed, zodat
 // bezoekers na een update niet handmatig "Demo zurücksetzen" hoeven te klikken.
-const SEED_VERSION = 3;
+const SEED_VERSION = 4;
 
 function daysFromNow(n) {
   const d = new Date();
@@ -16,6 +16,11 @@ function seedState() {
   const users = [
     { id: "nasrat", name: "Nasrat", role: "admin", roleLabel: "Pflegedienst Admin", initials: "NA" },
     { id: "michael", name: "Michael", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "MI" },
+    { id: "sabine", name: "Sabine", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "SA" },
+    { id: "jonas", name: "Jonas", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "JO" },
+    { id: "fatima", name: "Fatima", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "FA" },
+    { id: "klara", name: "Klara", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "KL" },
+    { id: "deniz", name: "Deniz", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "DE" },
   ];
 
   const patients = [
@@ -53,6 +58,7 @@ function seedState() {
 
   let itemId = 1;
   const items = [];
+  const assignPool = users.map((u) => u.id);
 
   // Per-patient profile: controls the mix of status/deadline so the demo
   // shows all three aggregate outcomes (Vollständig / Korrektur / Dringend).
@@ -78,7 +84,7 @@ function seedState() {
       const status = profile ? profile.statuses[idx % profile.statuses.length] : (idx % 3 === 0 ? "open" : idx % 3 === 1 ? "in_progress" : "done");
       const offset = profile ? profile.offsets[idx % profile.offsets.length] : [0, 5, 10, -2][idx % 4];
       const deadline = daysFromNow(offset);
-      const assignedTo = (idx + assigneeOffset) % 2 === 0 ? "nasrat" : "michael";
+      const assignedTo = assignPool[(idx + assigneeOffset) % assignPool.length];
       items.push({
         id: "i" + itemId++,
         category: categoryId,
