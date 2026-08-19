@@ -3,7 +3,7 @@
 // Ophogen bij elke wijziging aan de seed-data: bij een mismatch met de
 // opgeslagen localStorage-versie wordt automatisch opnieuw geseed, zodat
 // bezoekers na een update niet handmatig "Demo zurücksetzen" hoeven te klikken.
-const SEED_VERSION = 5;
+const SEED_VERSION = 6;
 
 function daysFromNow(n) {
   const d = new Date();
@@ -60,12 +60,12 @@ function seedState() {
   const items = [];
   const assignPool = users.map((u) => u.id);
 
-  // Vier-Augen-Prinzip: kiest een andere collega dan wie het punt afrondde
-  // om de Nachkontrolle te doen — niet per se de Admin, gewoon wie er als
-  // volgende in de rij staat.
+  // Vier-Augen-Prinzip: in de demo wordt de Nachkontrolle altijd door een
+  // Mitarbeiter-collega gedaan, nooit door de Admin (Nasrat) — dat is
+  // bewust geen adminrol, gewoon wie er als volgende in de rij staat.
   let nkCounter = 0;
   function pickNachkontrolleBy(completedById) {
-    const others = users.filter((u) => u.id !== completedById);
+    const others = users.filter((u) => u.role !== "admin" && u.id !== completedById);
     const chosen = others[nkCounter % others.length].id;
     nkCounter++;
     return chosen;
