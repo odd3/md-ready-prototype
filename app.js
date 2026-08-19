@@ -82,7 +82,10 @@ function computeAggregateStatus(patientId) {
   if (items.length === 0) return "korrektur";
   if (items.every((it) => isFullyDone(it))) return "vollstaendig";
   const today = todayStr();
-  const hasCritical = items.some((it) => (!isFullyDone(it) && it.status !== "done" && it.deadline < today) || (!isFullyDone(it) && it.priority === "high" && it.deadline <= today));
+  // "Dringend" geldt alleen voor punten die echt nog niet gedaan zijn
+  // (open/in behandeling) — een afgerond item dat op Nachkontrolle wacht
+  // is geen verwaarloosd punt, dus telt hier niet mee.
+  const hasCritical = items.some((it) => it.status !== "done" && (it.deadline < today || (it.priority === "high" && it.deadline <= today)));
   if (hasCritical) return "dringend";
   return "korrektur";
 }

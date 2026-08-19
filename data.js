@@ -18,6 +18,16 @@ function seedState() {
     { id: "p2", name: "Thomas Vogel", active: true, pflegegrad: "PG 2" },
     { id: "p3", name: "Ingrid Schuster", active: true, pflegegrad: "PG 4" },
     { id: "p4", name: "Klaus Weidner", active: true, pflegegrad: "PG 1" },
+    { id: "p5", name: "Helga Brandt", active: true, pflegegrad: "PG 2" },
+    { id: "p6", name: "Werner Fuchs", active: true, pflegegrad: "PG 3" },
+    { id: "p7", name: "Renate König", active: true, pflegegrad: "PG 5" },
+    { id: "p8", name: "Dieter Lang", active: true, pflegegrad: "PG 1" },
+    { id: "p9", name: "Ursula Hartmann", active: true, pflegegrad: "PG 4" },
+    { id: "p10", name: "Peter Wolff", active: true, pflegegrad: "PG 2" },
+    { id: "p11", name: "Brigitte Krause", active: true, pflegegrad: "PG 3" },
+    { id: "p12", name: "Manfred Zimmermann", active: false, pflegegrad: "PG 4" },
+    { id: "p13", name: "Elke Neumann", active: true, pflegegrad: "PG 1" },
+    { id: "p14", name: "Rolf Baumann", active: true, pflegegrad: "PG 3" },
   ];
 
   const categories = [
@@ -46,6 +56,16 @@ function seedState() {
     p2: { statuses: ["done", "in_progress", "open", "done", "in_progress", "done"], offsets: [-5, 3, 10, -2, 5, 14] }, // Korrektur erforderlich
     p3: { statuses: ["done", "open", "in_progress", "done", "open", "done"], offsets: [-5, -2, 2, -8, 7, -1] }, // Dringend (open + overdue)
     p4: { statuses: ["done", "in_progress", "open", "done", "done", "in_progress"], offsets: [-5, 4, 9, -2, 1, 6] }, // Korrektur erforderlich
+    p5: { statuses: ["done", "done", "done", "done", "done", "done"], offsets: [-12, -9, -7, -6, -5, -4] }, // Vollständig
+    p6: { statuses: ["done", "in_progress", "in_progress", "done", "open", "done"], offsets: [-4, 6, 8, -3, 12, 3] }, // Korrektur erforderlich
+    p7: { statuses: ["open", "done", "in_progress", "open", "done", "done"], offsets: [-6, -4, 5, -1, 9, -2] }, // Dringend
+    p8: { statuses: ["done", "done", "in_progress", "open", "in_progress", "done"], offsets: [-5, -3, 4, 8, 6, -1] }, // Korrektur erforderlich
+    p9: { statuses: ["in_progress", "open", "done", "done", "open", "in_progress"], offsets: [2, -3, -6, -4, 5, 9] }, // Dringend
+    p10: { statuses: ["done", "done", "done", "done", "done", "done"], offsets: [-11, -8, -7, -6, -4, -3] }, // Vollständig
+    p11: { statuses: ["done", "in_progress", "done", "open", "in_progress", "done"], offsets: [-5, 4, -2, 10, 7, -1] }, // Korrektur erforderlich
+    p12: { statuses: ["open", "open", "done", "in_progress", "done", "open"], offsets: [-3, -5, -8, 6, -2, 8] }, // Dringend
+    p13: { statuses: ["done", "in_progress", "open", "done", "done", "in_progress"], offsets: [-4, 5, 11, -3, 2, 7] }, // Korrektur erforderlich
+    p14: { statuses: ["open", "done", "open", "in_progress", "done", "done"], offsets: [-2, -5, -7, 4, -3, 9] }, // Dringend
   };
 
   function pushItems(categoryId, linkType, linkId, profile, assigneeOffset) {
@@ -92,11 +112,11 @@ function seedState() {
   pushItems("qm", "org", null, null, 0);
   pushItems("hygiene", "org", null, null, 1);
 
-  // Anna Berger (p1) ist het demo-voorbeeld van een volledig afgeronde
-  // (en na-gecontroleerde) patiëntenakte: alle "done"-items krijgen meteen
-  // een bevestigde Nachkontrolle door de andere gebruiker.
+  // Anna Berger (p1) en Peter Wolff (p10) zijn de demo-voorbeelden van een
+  // volledig afgeronde (en na-gecontroleerde) patiëntenakte: alle
+  // "done"-items krijgen meteen een bevestigde Nachkontrolle door de andere gebruiker.
   items
-    .filter((it) => it.linkId === "p1" && it.status === "done")
+    .filter((it) => (it.linkId === "p1" || it.linkId === "p10") && it.status === "done")
     .forEach((it) => {
       it.nachkontrolleDone = true;
       it.nachkontrolleBy = it.completedBy === "nasrat" ? "michael" : "nasrat";
@@ -127,6 +147,9 @@ function seedState() {
     { id: "call1", patientId: "p2", date: daysFromNow(-6), reason: "Terminverschiebung Pflegevisite", contact: "Tochter (Frau Vogel)", result: "Neuer Termin vereinbart", followUp: "Kalender aktualisiert" },
     { id: "call2", patientId: "p4", date: daysFromNow(-3), reason: "Rückfrage Medikamentenplan", contact: "Hausarztpraxis", result: "Rezept wird nachgereicht", followUp: "Verordnung nachfordern" },
     { id: "call3", patientId: "p3", date: daysFromNow(-1), reason: "Absage Termin wegen Krankenhaus", contact: "Patientin selbst", result: "Pflege pausiert bis Entlassung", followUp: "Wiederaufnahme prüfen" },
+    { id: "call4", patientId: "p7", date: daysFromNow(-7), reason: "Rückfrage Genehmigung Pflegekasse", contact: "Pflegekasse", result: "Unterlagen nachgereicht", followUp: "Antwort abwarten" },
+    { id: "call5", patientId: "p9", date: daysFromNow(-2), reason: "Absage wegen Krankheit Angehörige", contact: "Sohn (Herr Hartmann)", result: "Ersatztermin vereinbart", followUp: "Tourenplan anpassen" },
+    { id: "call6", patientId: "p12", date: daysFromNow(-14), reason: "Abmeldung — Pflege durch Angehörige übernommen", contact: "Ehefrau", result: "Betreuung beendet", followUp: "Akte archivieren" },
   ];
 
   // A few illustrative comments
@@ -136,6 +159,10 @@ function seedState() {
       { id: "c1", author: "michael", text: "Dokument fehlt noch. Wurde beim Arzt angefordert.", createdAt: daysFromNow(-4) },
       { id: "c2", author: "nasrat", text: "Bitte bis Freitag nachfassen.", createdAt: daysFromNow(-2) }
     );
+  }
+  const koenigItem = items.find((it) => it.category === "akte" && it.label === "SIS" && it.linkId === "p7");
+  if (koenigItem) {
+    koenigItem.comments.push({ id: "c3", author: "nasrat", text: "Frist bereits überschritten, bitte heute noch erledigen.", createdAt: daysFromNow(-1) });
   }
 
   return {
