@@ -386,7 +386,7 @@ function renderPatients() {
     </tr>`;
   const labelRow = `
     <tr class="label-row">
-      <th class="corner" style="position:sticky;left:0;top:28px;z-index:3;"></th>
+      <th class="corner" style="position:sticky;left:0;top:34px;z-index:3;"></th>
       ${[...akteLabels, ...verwLabels].map((l) => `<th title="${l}"><span class="rot">${l}</span></th>`).join("")}
     </tr>`;
 
