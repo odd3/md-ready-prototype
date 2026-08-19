@@ -213,7 +213,7 @@ tbody tr:hover { background: var(--surface-2); }
 
 /* ---- Matrix (Excel-achtig overzicht) ---- */
 .matrix-scroll { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); max-height: 78vh; }
-table.matrix { border-collapse: separate; border-spacing: 0; font-size: 13px; width: 100%; }
+table.matrix { border-collapse: separate; border-spacing: 0; font-size: 13px; }
 table.matrix th, table.matrix td { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); padding: 0; }
 table.matrix thead th {
   background: var(--surface-2); font-family: var(--font-mono); font-weight: 600; color: var(--ink-muted);
@@ -224,18 +224,18 @@ table.matrix thead tr.group-row th {
   border-bottom: 1px solid var(--line);
 }
 table.matrix thead tr.label-row th {
-  height: 150px; width: 58px; min-width: 58px; max-width: 58px; vertical-align: bottom; padding: 0 0 10px;
+  height: 168px; width: 138px; min-width: 138px; max-width: 138px; vertical-align: bottom; padding: 0 0 10px;
 }
 table.matrix thead tr.label-row th .rot {
   display: block; transform: rotate(-38deg); transform-origin: left bottom; white-space: nowrap;
-  font-size: 13.5px; font-weight: 500; letter-spacing: 0; margin-left: 22px; color: var(--ink);
+  font-size: 14.5px; font-weight: 500; letter-spacing: 0; margin-left: 26px; color: var(--ink);
 }
 table.matrix th.corner { position: sticky; left: 0; top: 0; z-index: 3; background: var(--surface-2); }
-table.matrix th.status-col, table.matrix td.status-col { min-width: 150px; text-align: left; padding: 8px 14px; }
+table.matrix th.status-col, table.matrix td.status-col { width: 190px; min-width: 190px; max-width: 190px; text-align: left; padding: 8px 14px; }
 table.matrix td.name-cell {
   position: sticky; left: 0; background: var(--surface); z-index: 1;
   padding: 10px 16px; text-align: left; white-space: nowrap; cursor: pointer; border-right: 1px solid var(--line);
-  min-width: 170px;
+  width: 190px; min-width: 190px; max-width: 190px;
 }
 table.matrix td.name-cell:hover { background: var(--surface-2); }
 table.matrix td.name-cell .pname { font-weight: 600; font-size: 13.5px; }
