@@ -323,6 +323,22 @@ function statusPillHtml(it) {
   }
   return `<span class="status-pill status-${it.status}">${statusLabel(it.status)}</span>`;
 }
+function renderHistoryBlock(item) {
+  if (!item.history || item.history.length === 0) return "";
+  const entries = [...item.history].sort((a, b) => (a.at < b.at ? 1 : -1));
+  return `<div class="field-row">
+    <span class="field-label">Verlauf</span>
+    <div class="comment-list">
+      ${entries
+        .map(
+          (h) => `<div class="comment" style="font-family:var(--font-mono);font-size:11.5px;">
+            ${fmtDate(h.at)} · ${userLabel(h.actor)} · ${HISTORY_ACTION_LABEL[h.action] || h.action}: ${h.detail}
+          </div>`
+        )
+        .join("")}
+    </div>
+  </div>`;
+}
 function renderNachkontrolleBlock(item) {
   if (item.nachkontrolleDone) {
     return `<div class="field-row">
@@ -559,7 +575,14 @@ function renderOverlayAndPanel() {
         </div>
         <div class="field-row">
           <span class="field-label">Frist</span>
-          <span class="deadline-badge ${dl.cls}">${dl.label}</span>
+          ${
+            isAdmin()
+              ? `<div style="display:flex;align-items:center;gap:8px;">
+                  <input type="date" id="deadline-input" value="${item.deadline}" style="padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:13px;" />
+                  <span class="deadline-badge ${dl.cls}">${dl.label}</span>
+                </div>`
+              : `<span class="deadline-badge ${dl.cls}">${dl.label}</span>`
+          }
         </div>
         <div class="field-row">
           <span class="field-label">Verantwortlich</span>
@@ -567,6 +590,7 @@ function renderOverlayAndPanel() {
         </div>
         ${item.completedAt ? `<div class="field-row"><span class="field-label">Abgeschlossen</span><span>${fmtDate(item.completedAt)} von ${userLabel(item.completedBy)}</span></div>` : ""}
         ${item.status === "done" && item.nachkontrolleRequired ? renderNachkontrolleBlock(item) : ""}
+        ${renderHistoryBlock(item)}
         <div class="field-row">
           <span class="field-label">Kommentare</span>
           <div class="comment-list">
@@ -612,6 +636,18 @@ function renderOverlayAndPanel() {
         render();
       })
     );
+    const deadlineInput = panel.querySelector("#deadline-input");
+    if (deadlineInput && isAdmin()) {
+      deadlineInput.addEventListener("change", (e) => {
+        const newDeadline = e.target.value;
+        if (!newDeadline || newDeadline === item.deadline) return;
+        logHistory(item, "deadline_changed", `${fmtDate(item.deadline)} → ${fmtDate(newDeadline)}`);
+        item.deadline = newDeadline;
+        item.updatedAt = todayStr();
+        saveState();
+        render();
+      });
+    }
     const confirmBtn = panel.querySelector("#confirm-nachkontrolle");
     if (confirmBtn) {
       confirmBtn.addEventListener("click", () => {
@@ -631,6 +667,11 @@ function renderOverlayAndPanel() {
   frag.appendChild(panel);
   return frag;
 }
+
+function logHistory(item, action, detail) {
+  item.history.push({ id: "h" + Date.now() + Math.random().toString(16).slice(2), actor: state.currentUserId, action, detail, at: todayStr() });
+}
+const HISTORY_ACTION_LABEL = { deadline_changed: "Frist geändert" };
 
 function addComment(item) {
   const input = document.getElementById("comment-input");

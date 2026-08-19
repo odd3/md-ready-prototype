@@ -3,7 +3,7 @@
 // Ophogen bij elke wijziging aan de seed-data: bij een mismatch met de
 // opgeslagen localStorage-versie wordt automatisch opnieuw geseed, zodat
 // bezoekers na een update niet handmatig "Demo zurücksetzen" hoeven te klikken.
-const SEED_VERSION = 2;
+const SEED_VERSION = 3;
 
 function daysFromNow(n) {
   const d = new Date();
@@ -100,6 +100,8 @@ function seedState() {
         nachkontrolleBy: null,
         nachkontrolleAt: null,
         comments: [],
+        // Audit trail: los van de (bewerkbare) reacties, append-only.
+        history: [],
       });
     });
   }
