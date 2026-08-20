@@ -5,7 +5,9 @@ let state = loadState();
 let route = "dashboard";
 let activeFilters = { quick: null, patient: "", category: "", assignee: "", status: "" };
 let openItemId = null;
-let modalState = null; // { kind: "patient-new" | "patient-edit" | "item-new", id? }
+let staffTab = "examinierte";
+// { kind: "patient-new"|"patient-edit"|"staff-new"|"staff-edit"|"item-new"|"pflegedienst-new"|"pdf-export", id?, category?, categoryIds?, scope?, scopeValue? }
+let modalState = null;
 
 function loadState() {
   const raw = localStorage.getItem(STORAGE_KEY);
@@ -42,6 +44,9 @@ function todayStr() {
   d.setHours(0, 0, 0, 0);
   return d.toISOString().slice(0, 10);
 }
+function daysBetween(a, b) {
+  return Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000);
+}
 function fmtDate(s) {
   if (!s) return "–";
   const [y, m, d] = s.split("-");
@@ -58,9 +63,20 @@ function userLabel(id) {
   const u = state.users.find((x) => x.id === id);
   return u ? u.name : id;
 }
+function staffLabel(id) {
+  const s = state.staff.find((x) => x.id === id);
+  return s ? s.name : id;
+}
+function staffCategoryLabel(id) {
+  const c = STAFF_CATEGORIES.find((x) => x.id === id);
+  return c ? c.label : id;
+}
 function categoryLabel(id) {
   const c = state.categories.find((x) => x.id === id);
   return c ? c.label : id;
+}
+function isSimpleDocCategory(categoryId) {
+  return categoryId === "qm" || categoryId === "hygiene";
 }
 function visibleCategories() {
   if (isAdmin()) return state.categories;
@@ -69,6 +85,12 @@ function visibleCategories() {
 function visibleItems() {
   const catIds = visibleCategories().map((c) => c.id);
   return state.items.filter((it) => catIds.includes(it.category));
+}
+function patientCategories() {
+  return state.categories.filter((c) => c.scope === "patient");
+}
+function patientScopedItems() {
+  return state.items.filter((it) => it.linkType === "patient");
 }
 function itemLabelsForCategory(categoryId) {
   const refPatient = state.patients[0];
@@ -80,25 +102,32 @@ function itemLinkLabel(item) {
     const p = state.patients.find((x) => x.id === item.linkId);
     return p ? p.name : "–";
   }
-  if (item.linkType === "employee") return userLabel(item.linkId);
+  if (item.linkType === "staff") return staffLabel(item.linkId);
   return "Organisation";
 }
 function isFullyDone(item) {
   return item.status === "done" && (!item.nachkontrolleRequired || item.nachkontrolleDone);
 }
-function computeAggregateStatus(patientId) {
-  const items = state.items.filter((it) => it.linkType === "patient" && it.linkId === patientId);
+function computeAggregateStatus(linkType, linkId) {
+  const items = state.items.filter((it) => it.linkType === linkType && it.linkId === linkId);
   if (items.length === 0) return "korrektur";
   if (items.every((it) => isFullyDone(it))) return "vollstaendig";
   const today = todayStr();
-  // "Dringend" geldt alleen voor punten die echt nog niet gedaan zijn
-  // (open/in behandeling) — een afgerond item dat op Nachkontrolle wacht
-  // is geen verwaarloosd punt, dus telt hier niet mee.
   const hasCritical = items.some((it) => it.status !== "done" && (it.deadline < today || (it.priority === "high" && it.deadline <= today)));
   if (hasCritical) return "dringend";
   return "korrektur";
 }
 const AGGREGATE_LABEL = { vollstaendig: "Vollständig", korrektur: "Korrektur erforderlich", dringend: "Dringend" };
+
+// Pflegedienste: aanmaakdatum + interval → eerstvolgende MD-controle, countdown en voortgang.
+function pflegedienstInfo(pd) {
+  const nextDate = addMonths(pd.createdAt, pd.auditIntervalMonths);
+  const totalDays = daysBetween(pd.createdAt, nextDate);
+  const elapsedDays = daysBetween(pd.createdAt, todayStr());
+  const daysLeft = daysBetween(todayStr(), nextDate);
+  const pct = Math.max(0, Math.min(100, Math.round((elapsedDays / totalDays) * 100)));
+  return { nextDate, daysLeft, pct };
+}
 
 /* ---------------- Rendering ---------------- */
 
@@ -112,7 +141,9 @@ function render() {
   if (route === "dashboard") main.appendChild(renderDashboard());
   else if (route === "checklist") main.appendChild(renderChecklist());
   else if (route === "patients") main.appendChild(renderPatients());
-  else if (route === "calls") main.appendChild(renderCalls());
+  else if (route === "personal" && isAdmin()) main.appendChild(renderPersonal());
+  else if (route === "qm") main.appendChild(renderSimpleDocPage("qm"));
+  else if (route === "hygiene") main.appendChild(renderSimpleDocPage("hygiene"));
   else if (route === "admin" && isAdmin()) main.appendChild(renderAdmin());
   else { route = "dashboard"; main.appendChild(renderDashboard()); }
   app.appendChild(main);
@@ -129,8 +160,10 @@ function renderSidebar() {
     { id: "dashboard", label: "Dashboard", ic: "◆" },
     { id: "checklist", label: "Checkliste", ic: "☑" },
     { id: "patients", label: "Patienten", ic: "◎" },
-    { id: "calls", label: "Anrufe", ic: "☎" },
   ];
+  if (isAdmin()) nav.push({ id: "personal", label: "Personal", ic: "◧" });
+  nav.push({ id: "qm", label: "QM-Handbuch", ic: "▤" });
+  nav.push({ id: "hygiene", label: "Hygiene", ic: "✚" });
   if (isAdmin()) nav.push({ id: "admin", label: "Beheer", ic: "⚙" });
 
   el.innerHTML = `
@@ -186,7 +219,6 @@ function renderDashboard() {
   const overdue = open.filter((it) => it.status !== "done" && it.deadline < today);
   const dueToday = open.filter((it) => it.status !== "done" && it.deadline === today);
   const done = items.filter((it) => isFullyDone(it));
-  const pendingNachkontrolle = items.filter((it) => it.status === "done" && it.nachkontrolleRequired && !it.nachkontrolleDone);
 
   wrap.innerHTML = `
     <div class="page-header">
@@ -198,7 +230,6 @@ function renderDashboard() {
     <div class="kpi-grid">
       <div class="kpi-card"><div class="kpi-value">${open.length}</div><div class="kpi-label">Offene Punkte</div></div>
       <div class="kpi-card accent"><div class="kpi-value">${done.length}</div><div class="kpi-label">Abgeschlossen</div></div>
-      <div class="kpi-card warn"><div class="kpi-value">${pendingNachkontrolle.length}</div><div class="kpi-label">Nachkontrolle ausstehend</div></div>
       <div class="kpi-card warn"><div class="kpi-value">${dueToday.length}</div><div class="kpi-label">Heute fällig</div></div>
       <div class="kpi-card danger"><div class="kpi-value">${overdue.length}</div><div class="kpi-label">Frist überschritten</div></div>
       <div class="kpi-card"><div class="kpi-value">${my.filter((i) => !isFullyDone(i)).length}</div><div class="kpi-label">Meine Aufgaben</div></div>
@@ -217,7 +248,30 @@ function renderDashboard() {
         })
         .join("")}
     </div>
+
+    <div class="page-header" style="margin-top:36px;">
+      <h3 style="font-family:var(--font-display);font-size:16px;margin:0;">Pflegedienste — MD-Kontrollen</h3>
+      ${isAdmin() ? '<button class="btn primary" id="new-pd-btn">+ Neuer Dienst</button>' : ""}
+    </div>
+    <div class="pd-list">
+      ${state.pflegedienste
+        .map((pd) => {
+          const info = pflegedienstInfo(pd);
+          const overdueDienst = info.daysLeft < 0;
+          return `<div class="pd-card">
+            <div class="pd-head">
+              <span class="pd-name">${pd.name}</span>
+              <span class="pd-days ${overdueDienst ? "overdue" : ""}">${overdueDienst ? "Kontrolle überfällig" : info.daysLeft + " Tage bis Kontrolle"}</span>
+            </div>
+            <div class="progress-track"><div class="progress-fill ${overdueDienst ? "danger" : ""}" style="width:${info.pct}%"></div></div>
+            <div class="pd-meta">Erstellt am ${fmtDate(pd.createdAt)} · Intervall ${pd.auditIntervalMonths} Monate · Nächste Kontrolle ${fmtDate(info.nextDate)}</div>
+          </div>`;
+        })
+        .join("") || '<p style="color:var(--ink-muted);font-size:13px;">Noch keine Pflegedienste angelegt.</p>'}
+    </div>
   `;
+  const newPdBtn = wrap.querySelector("#new-pd-btn");
+  if (newPdBtn) newPdBtn.addEventListener("click", () => { modalState = { kind: "pflegedienst-new" }; render(); });
   return wrap;
 }
 
@@ -228,10 +282,11 @@ function renderChecklist() {
   header.innerHTML = `
     <div>
       <h1>Checkliste</h1>
-      <div class="page-sub">${visibleItems().length} Punkte sichtbar</div>
+      <div class="page-sub">Patientenakte — ${patientScopedItems().length} Punkte sichtbar</div>
     </div>
     <div style="display:flex;gap:8px;">
       ${isAdmin() ? '<button class="btn" id="new-item-btn">+ Punkt hinzufügen</button>' : ""}
+      ${isAdmin() ? '<button class="btn" id="pdf-export-btn">PDF Vorschau</button>' : ""}
       ${isAdmin() ? '<button class="btn primary" id="export-csv">Export (CSV)</button>' : ""}
     </div>
   `;
@@ -239,7 +294,15 @@ function renderChecklist() {
   const newItemBtn = header.querySelector("#new-item-btn");
   if (newItemBtn) {
     newItemBtn.addEventListener("click", () => {
-      modalState = { kind: "item-new" };
+      modalState = { kind: "item-new", categoryIds: ["akte", "verwaltung"] };
+      openItemId = null;
+      render();
+    });
+  }
+  const pdfBtn = header.querySelector("#pdf-export-btn");
+  if (pdfBtn) {
+    pdfBtn.addEventListener("click", () => {
+      modalState = { kind: "pdf-export", scope: "all", scopeValue: "" };
       openItemId = null;
       render();
     });
@@ -251,23 +314,21 @@ function renderChecklist() {
     { id: "mine", label: "Meine Aufgaben" },
     { id: "open", label: "Offen" },
     { id: "today", label: "Heute" },
-    { id: "overdue", label: "Frist überschritten" },
   ];
   filterBar.innerHTML = `
     ${quickFilters.map((f) => `<button class="chip ${activeFilters.quick === f.id ? "active" : ""}" data-quick="${f.id}">${f.label}</button>`).join("")}
-    <select class="select-filter" id="f-category"><option value="">Alle Kategorien</option>${visibleCategories().map((c) => `<option value="${c.id}" ${activeFilters.category === c.id ? "selected" : ""}>${c.label}</option>`).join("")}</select>
+    <select class="select-filter" id="f-category"><option value="">Alle Kategorien</option>${patientCategories().map((c) => `<option value="${c.id}" ${activeFilters.category === c.id ? "selected" : ""}>${c.label}</option>`).join("")}</select>
     <select class="select-filter" id="f-patient"><option value="">Alle Patienten</option>${state.patients.map((p) => `<option value="${p.id}" ${activeFilters.patient === p.id ? "selected" : ""}>${p.name}</option>`).join("")}</select>
     <select class="select-filter" id="f-assignee"><option value="">Alle Verantwortlichen</option>${state.users.map((u) => `<option value="${u.id}" ${activeFilters.assignee === u.id ? "selected" : ""}>${u.name}</option>`).join("")}</select>
     <select class="select-filter" id="f-status"><option value="">Alle Status</option><option value="open" ${activeFilters.status === "open" ? "selected" : ""}>Offen</option><option value="in_progress" ${activeFilters.status === "in_progress" ? "selected" : ""}>In Bearbeitung</option><option value="done" ${activeFilters.status === "done" ? "selected" : ""}>Abgeschlossen</option></select>
   `;
   wrap.appendChild(filterBar);
 
-  let items = visibleItems();
+  let items = patientScopedItems();
   const today = todayStr();
   if (activeFilters.quick === "mine") items = items.filter((i) => i.assignees.includes(state.currentUserId));
   if (activeFilters.quick === "open") items = items.filter((i) => !isFullyDone(i));
   if (activeFilters.quick === "today") items = items.filter((i) => i.status !== "done" && i.deadline === today);
-  if (activeFilters.quick === "overdue") items = items.filter((i) => i.status !== "done" && i.deadline < today);
   if (activeFilters.category) items = items.filter((i) => i.category === activeFilters.category);
   if (activeFilters.patient) items = items.filter((i) => i.linkType === "patient" && i.linkId === activeFilters.patient);
   if (activeFilters.assignee) items = items.filter((i) => i.assignees.includes(activeFilters.assignee));
@@ -332,8 +393,8 @@ function statusLabel(s) {
   return { open: "Offen", in_progress: "In Bearbeitung", done: "Abgeschlossen" }[s] || s;
 }
 function statusPillHtml(it) {
-  if (it.status === "done" && it.nachkontrolleRequired && !it.nachkontrolleDone) {
-    return `<span class="status-pill status-in_progress">Nachkontrolle ausstehend</span>`;
+  if (isSimpleDocCategory(it.category)) {
+    return it.status === "done" ? `<span class="status-pill status-done">Vorhanden</span>` : `<span class="status-pill status-open">Nicht vorhanden</span>`;
   }
   return `<span class="status-pill status-${it.status}">${statusLabel(it.status)}</span>`;
 }
@@ -353,29 +414,10 @@ function renderHistoryBlock(item) {
     </div>
   </div>`;
 }
-function renderNachkontrolleBlock(item) {
-  if (item.nachkontrolleDone) {
-    return `<div class="field-row">
-      <span class="field-label">Nachkontrolle</span>
-      <span>Bestätigt am ${fmtDate(item.nachkontrolleAt)} von ${userLabel(item.nachkontrolleBy)}</span>
-    </div>`;
-  }
-  const sameUser = state.currentUserId === item.completedBy;
-  return `<div class="field-row">
-    <span class="field-label">Nachkontrolle</span>
-    <div style="background:var(--amber-soft);color:var(--amber);border-radius:7px;padding:9px 11px;font-size:12.5px;">
-      Noch nicht bestätigt. Vier-Augen-Prinzip: eine andere Person als ${userLabel(item.completedBy)} muss dies bestätigen.
-    </div>
-    <button class="btn primary" id="confirm-nachkontrolle" ${sameUser ? "disabled title=\"Nicht durch dieselbe Person möglich\"" : ""} style="margin-top:6px;">
-      Nachkontrolle bestätigen (als ${currentUser().name})
-    </button>
-  </div>`;
-}
 
 function cellDisplay(item) {
   const today = todayStr();
-  if (isFullyDone(item)) return { symbol: "✓", cls: "mx-done" };
-  if (item.status === "done") return { symbol: "✓", cls: "mx-pending" };
+  if (item.status === "done") return { symbol: "✓", cls: "mx-done" };
   if (item.status === "in_progress") return { symbol: "◐", cls: "mx-progress" };
   if (item.deadline < today) return { symbol: "!", cls: "mx-overdue" };
   return { symbol: "·", cls: "mx-open" };
@@ -418,12 +460,11 @@ function renderPatients() {
           const item = state.items.find((it) => it.linkType === "patient" && it.linkId === p.id && it.category === cat && it.label === label);
           if (!item) return `<td class="cell ${cat === "akte" ? "col-akte" : "col-verwaltung"}">–</td>`;
           const d = cellDisplay(item);
-          const dl = deadlineInfo(item.deadline, item.status);
-          const titleTxt = `${item.label} · ${statusLabel(item.status)} · Frist ${fmtDate(item.deadline)} · ${item.assignees.map(userLabel).join(", ")}${item.status === "done" && !item.nachkontrolleDone ? " · Nachkontrolle ausstehend" : ""}`;
+          const titleTxt = `${item.label} · ${statusLabel(item.status)} · Frist ${fmtDate(item.deadline)} · ${item.assignees.map(userLabel).join(", ")}`;
           return `<td class="cell ${cat === "akte" ? "col-akte" : "col-verwaltung"}"><button class="mx-btn ${d.cls}" data-item="${item.id}" title="${titleTxt}">${d.symbol}</button></td>`;
         })
         .join("");
-      const agg = computeAggregateStatus(p.id);
+      const agg = computeAggregateStatus("patient", p.id);
       return `<tr>
         <td class="name-cell" data-patient="${p.id}">
           <span class="pname">${p.name}</span>
@@ -443,7 +484,6 @@ function renderPatients() {
   legend.className = "matrix-legend";
   legend.innerHTML = `
     <span><span class="mx-done">✓</span> Abgeschlossen</span>
-    <span><span class="mx-pending">✓</span> Nachkontrolle ausstehend</span>
     <span><span class="mx-progress">◐</span> In Bearbeitung</span>
     <span><span class="mx-overdue">!</span> Offen, Frist überschritten</span>
     <span><span class="mx-open">·</span> Offen</span>
@@ -485,64 +525,118 @@ function renderPatients() {
   return wrap;
 }
 
-function renderCalls() {
+function renderPersonal() {
   const wrap = document.createElement("div");
-  wrap.innerHTML = `<div class="page-header"><div><h1>Telefon-Absagen / Anrufe</h1><div class="page-sub">Log van telefonische patiëntcontacten (Beispieldaten)</div></div></div>`;
+  wrap.innerHTML = `
+    <div class="page-header">
+      <div><h1>Personal</h1><div class="page-sub">Personeelsdossiers per kwalificatiecategorie</div></div>
+      <button class="btn primary" id="new-staff-btn">+ Neues Personal</button>
+    </div>`;
 
-  const tableWrap = document.createElement("div");
-  tableWrap.className = "table-wrap";
-  const rows = [...state.calls].sort((a, b) => (a.date < b.date ? 1 : -1));
-  tableWrap.innerHTML = `
-    <table>
-      <thead><tr><th>Datum</th><th>Patient</th><th>Grund</th><th>Gesprächspartner</th><th>Ergebnis</th><th>Weitere Aktion</th></tr></thead>
-      <tbody>
-        ${rows
-          .map((c) => {
-            const p = state.patients.find((x) => x.id === c.patientId);
-            return `<tr>
-              <td>${fmtDate(c.date)}</td>
-              <td>${p ? p.name : "–"}</td>
-              <td>${c.reason}</td>
-              <td>${c.contact}</td>
-              <td>${c.result}</td>
-              <td>${c.followUp}</td>
-            </tr>`;
-          })
-          .join("") || `<tr><td colspan="6" style="text-align:center;color:var(--ink-muted);padding:24px;">Nog geen gesprekken geregistreerd.</td></tr>`}
-      </tbody>
-    </table>
-  `;
-  wrap.appendChild(tableWrap);
+  const tabBar = document.createElement("div");
+  tabBar.className = "filter-bar";
+  tabBar.innerHTML = STAFF_CATEGORIES.map((c) => `<button class="chip ${staffTab === c.id ? "active" : ""}" data-stafftab="${c.id}">${c.label}</button>`).join("");
+  wrap.appendChild(tabBar);
 
-  const formWrap = document.createElement("div");
-  formWrap.style.cssText = "margin-top:20px;max-width:520px;display:flex;flex-direction:column;gap:8px;";
-  formWrap.innerHTML = `
-    <h3 style="font-family:var(--font-display);font-size:15px;margin:0;">Neuer Eintrag</h3>
-    <select class="select-filter" id="call-patient">${state.patients.map((p) => `<option value="${p.id}">${p.name}</option>`).join("")}</select>
-    <input class="select-filter" id="call-reason" placeholder="Grund des Anrufs" />
-    <input class="select-filter" id="call-contact" placeholder="Gesprächspartner" />
-    <input class="select-filter" id="call-result" placeholder="Ergebnis" />
-    <input class="select-filter" id="call-followup" placeholder="Weitere Aktion" />
-    <button class="btn primary" id="call-submit" style="align-self:flex-start;">Eintrag speichern</button>
-  `;
-  wrap.appendChild(formWrap);
+  const labels = ITEM_DEFS.personal;
+  const staffInCat = state.staff.filter((s) => s.category === staffTab);
 
-  wrap.querySelector("#call-submit").addEventListener("click", () => {
-    const reason = wrap.querySelector("#call-reason").value.trim();
-    if (!reason) return;
-    state.calls.push({
-      id: "call" + Date.now(),
-      patientId: wrap.querySelector("#call-patient").value,
-      date: todayStr(),
-      reason,
-      contact: wrap.querySelector("#call-contact").value.trim() || "–",
-      result: wrap.querySelector("#call-result").value.trim() || "–",
-      followUp: wrap.querySelector("#call-followup").value.trim() || "–",
-    });
-    saveState();
+  const matrixWrap = document.createElement("div");
+  matrixWrap.className = "matrix-scroll";
+  const groupRow = `<tr class="group-row"><th class="corner"></th><th class="col-akte" colspan="${labels.length}">${staffCategoryLabel(staffTab)}</th><th class="status-col" rowspan="2">Status</th></tr>`;
+  const labelRow = `<tr class="label-row"><th class="corner" style="position:sticky;left:0;top:34px;z-index:3;"></th>${labels.map((l) => `<th class="col-akte" title="${l}"><span class="rot">${l}</span></th>`).join("")}</tr>`;
+  const bodyRows = staffInCat
+    .map((s) => {
+      const cells = labels
+        .map((label) => {
+          const item = state.items.find((it) => it.linkType === "staff" && it.linkId === s.id && it.category === "personal" && it.label === label);
+          if (!item) return `<td class="cell col-akte">–</td>`;
+          const d = cellDisplay(item);
+          const titleTxt = `${item.label} · ${statusLabel(item.status)} · Frist ${fmtDate(item.deadline)} · ${item.assignees.map(userLabel).join(", ")}`;
+          return `<td class="cell col-akte"><button class="mx-btn ${d.cls}" data-item="${item.id}" title="${titleTxt}">${d.symbol}</button></td>`;
+        })
+        .join("");
+      const agg = computeAggregateStatus("staff", s.id);
+      return `<tr>
+        <td class="name-cell">
+          <span class="pname">${s.name}</span>
+          <span class="psub">${s.active ? "aktiv" : "inaktiv"}</span>
+          <button class="edit-btn" data-edit-staff="${s.id}" title="Personal bearbeiten">✎</button>
+        </td>
+        ${cells}
+        <td class="status-col"><span class="akte-pill akte-${agg}">${AGGREGATE_LABEL[agg]}</span></td>
+      </tr>`;
+    })
+    .join("");
+  matrixWrap.innerHTML = `<table class="matrix"><thead>${groupRow}${labelRow}</thead><tbody>${bodyRows || `<tr><td colspan="${labels.length + 2}" style="padding:20px;text-align:center;color:var(--ink-muted);">Nog geen personeel in deze categorie.</td></tr>`}</tbody></table>`;
+  wrap.appendChild(matrixWrap);
+
+  tabBar.querySelectorAll("[data-stafftab]").forEach((b) =>
+    b.addEventListener("click", () => {
+      staffTab = b.dataset.stafftab;
+      render();
+    })
+  );
+  matrixWrap.querySelectorAll("[data-item]").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openItemId = btn.dataset.item;
+      modalState = null;
+      render();
+    })
+  );
+  matrixWrap.querySelectorAll("[data-edit-staff]").forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      modalState = { kind: "staff-edit", id: btn.dataset.editStaff };
+      openItemId = null;
+      render();
+    })
+  );
+  wrap.querySelector("#new-staff-btn").addEventListener("click", () => {
+    modalState = { kind: "staff-new", category: staffTab };
+    openItemId = null;
     render();
   });
 
+  return wrap;
+}
+
+function renderSimpleDocPage(categoryId) {
+  const wrap = document.createElement("div");
+  const cat = state.categories.find((c) => c.id === categoryId);
+  const items = state.items.filter((it) => it.category === categoryId && it.linkType === "org");
+  const doneCount = items.filter((it) => it.status === "done").length;
+  wrap.innerHTML = `
+    <div class="page-header">
+      <div><h1>${cat.label}</h1><div class="page-sub">${doneCount} / ${items.length} vorhanden — einfache Ja/Nein-Checkliste</div></div>
+      ${isAdmin() ? '<button class="btn primary" id="new-doc-item-btn">+ Punkt hinzufügen</button>' : ""}
+    </div>`;
+  const list = document.createElement("div");
+  list.className = "table-wrap";
+  list.innerHTML = `
+    <table>
+      <thead><tr><th>Dokument</th><th>Status</th></tr></thead>
+      <tbody>
+        ${items.map((it) => `<tr data-item="${it.id}"><td>${it.label}</td><td>${statusPillHtml(it)}</td></tr>`).join("") || `<tr><td colspan="2" style="text-align:center;color:var(--ink-muted);padding:20px;">Noch keine Einträge.</td></tr>`}
+      </tbody>
+    </table>
+  `;
+  wrap.appendChild(list);
+  list.querySelectorAll("[data-item]").forEach((row) =>
+    row.addEventListener("click", () => {
+      openItemId = row.dataset.item;
+      modalState = null;
+      render();
+    })
+  );
+  const newBtn = wrap.querySelector("#new-doc-item-btn");
+  if (newBtn)
+    newBtn.addEventListener("click", () => {
+      modalState = { kind: "item-new", categoryIds: [categoryId] };
+      openItemId = null;
+      render();
+    });
   return wrap;
 }
 
@@ -571,7 +665,7 @@ function renderAdmin() {
   wrap.appendChild(tableWrap);
   const note = document.createElement("p");
   note.style.cssText = "color:var(--ink-muted);font-size:13px;margin-top:16px;max-width:60ch;";
-  note.textContent = "In dit prototype is gebruikersbeheer read-only (twee vaste demo-accounts). Aanmaken/bewerken van gebruikers volgt zodra het backend/datamodel is uitgewerkt.";
+  note.textContent = "In dit prototype is gebruikersbeheer read-only (vaste demo-accounts). Personeelsdossiers beheer je via de pagina 'Personal'.";
   wrap.appendChild(note);
   return wrap;
 }
@@ -594,6 +688,7 @@ function renderOverlayAndPanel() {
   panel.className = "panel" + (item ? " open" : "");
   if (item) {
     const dl = deadlineInfo(item.deadline, item.status);
+    const simple = isSimpleDocCategory(item.category);
     panel.innerHTML = `
       <div class="panel-header">
         <div>
@@ -606,12 +701,20 @@ function renderOverlayAndPanel() {
         <div class="field-row">
           <span class="field-label">Status</span>
           <div class="status-buttons">
-            <button data-status="open" class="${item.status === "open" ? "active" : ""}">Offen</button>
-            <button data-status="in_progress" class="${item.status === "in_progress" ? "active" : ""}">In Bearbeitung</button>
-            <button data-status="done" class="${item.status === "done" ? "active" : ""}">Abgeschlossen</button>
+            ${
+              simple
+                ? `<button data-status="open" class="${item.status === "open" ? "active" : ""}">Nicht vorhanden</button>
+                   <button data-status="done" class="${item.status === "done" ? "active" : ""}">Vorhanden</button>`
+                : `<button data-status="open" class="${item.status === "open" ? "active" : ""}">Offen</button>
+                   <button data-status="in_progress" class="${item.status === "in_progress" ? "active" : ""}">In Bearbeitung</button>
+                   <button data-status="done" class="${item.status === "done" ? "active" : ""}">Abgeschlossen</button>`
+            }
           </div>
         </div>
-        <div class="field-row">
+        ${
+          simple
+            ? ""
+            : `<div class="field-row">
           <span class="field-label">Frist</span>
           ${
             isAdmin()
@@ -627,9 +730,9 @@ function renderOverlayAndPanel() {
           <div class="filter-bar" style="margin:0;">
             ${state.users.map((u) => `<button class="chip ${item.assignees.includes(u.id) ? "active" : ""}" data-assignee="${u.id}">${u.name}</button>`).join("")}
           </div>
-        </div>
+        </div>`
+        }
         ${item.completedAt ? `<div class="field-row"><span class="field-label">Abgeschlossen</span><span>${fmtDate(item.completedAt)} von ${userLabel(item.completedBy)}</span></div>` : ""}
-        ${item.status === "done" && item.nachkontrolleRequired ? renderNachkontrolleBlock(item) : ""}
         ${renderHistoryBlock(item)}
         <div class="field-row">
           <span class="field-label">Kommentare</span>
@@ -662,15 +765,9 @@ function renderOverlayAndPanel() {
         if (item.status === "done") {
           item.completedAt = todayStr();
           item.completedBy = state.currentUserId;
-          item.nachkontrolleDone = false;
-          item.nachkontrolleBy = null;
-          item.nachkontrolleAt = null;
         } else {
           item.completedAt = null;
           item.completedBy = null;
-          item.nachkontrolleDone = false;
-          item.nachkontrolleBy = null;
-          item.nachkontrolleAt = null;
         }
         saveState();
         render();
@@ -705,17 +802,6 @@ function renderOverlayAndPanel() {
         render();
       });
     }
-    const confirmBtn = panel.querySelector("#confirm-nachkontrolle");
-    if (confirmBtn) {
-      confirmBtn.addEventListener("click", () => {
-        if (state.currentUserId === item.completedBy) return;
-        item.nachkontrolleDone = true;
-        item.nachkontrolleBy = state.currentUserId;
-        item.nachkontrolleAt = todayStr();
-        saveState();
-        render();
-      });
-    }
     panel.querySelector("#comment-submit").addEventListener("click", () => addComment(item));
     panel.querySelector("#comment-input").addEventListener("keydown", (e) => {
       if (e.key === "Enter") addComment(item);
@@ -739,7 +825,7 @@ function addComment(item) {
   render();
 }
 
-/* ---------------- Patiënt / checklistpunt toevoegen (Admin) ---------------- */
+/* ---------------- Toevoegen/wijzigen (Admin) ---------------- */
 
 const INPUT_STYLE = "width:100%;padding:8px 10px;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:13.5px;";
 let adhocCounter = 1;
@@ -749,8 +835,8 @@ function nextAdhocId() {
 
 function addChecklistItemDefinition(categoryId, label) {
   const cat = state.categories.find((c) => c.id === categoryId);
-  const targets = cat.scope === "patient" ? state.patients.map((p) => p.id) : cat.scope === "employee" ? state.users.map((u) => u.id) : [null];
-  const linkType = cat.scope === "patient" ? "patient" : cat.scope === "employee" ? "employee" : "org";
+  const targets = cat.scope === "patient" ? state.patients.map((p) => p.id) : cat.scope === "staff" ? state.staff.map((s) => s.id) : [null];
+  const linkType = cat.scope === "patient" ? "patient" : cat.scope === "staff" ? "staff" : "org";
   targets.forEach((linkId) => {
     state.items.push(blankChecklistItem(nextAdhocId(), categoryId, label, linkType, linkId, state.currentUserId));
   });
@@ -771,7 +857,11 @@ function renderModalPanel() {
 
   const panel = document.createElement("div");
   panel.className = "panel open";
-  panel.innerHTML = modalState.kind === "item-new" ? newItemFormHtml() : patientFormHtml(modalState.kind === "patient-edit" ? state.patients.find((p) => p.id === modalState.id) : null);
+  if (modalState.kind === "item-new") panel.innerHTML = newItemFormHtml();
+  else if (modalState.kind === "patient-new" || modalState.kind === "patient-edit") panel.innerHTML = patientFormHtml(modalState.kind === "patient-edit" ? state.patients.find((p) => p.id === modalState.id) : null);
+  else if (modalState.kind === "staff-new" || modalState.kind === "staff-edit") panel.innerHTML = staffFormHtml(modalState.kind === "staff-edit" ? state.staff.find((s) => s.id === modalState.id) : null);
+  else if (modalState.kind === "pflegedienst-new") panel.innerHTML = pflegedienstFormHtml();
+  else if (modalState.kind === "pdf-export") panel.innerHTML = pdfExportFormHtml();
   frag.appendChild(panel);
 
   const closeBtn = panel.querySelector("#modal-close");
@@ -804,6 +894,30 @@ function renderModalPanel() {
     });
   }
 
+  const sfSubmit = panel.querySelector("#sf-submit");
+  if (sfSubmit) {
+    sfSubmit.addEventListener("click", () => {
+      const name = panel.querySelector("#sf-name").value.trim();
+      if (!name) return;
+      const category = panel.querySelector("#sf-category").value;
+      const active = panel.querySelector("#sf-active").value === "true";
+      if (modalState.kind === "staff-edit") {
+        const s = state.staff.find((x) => x.id === modalState.id);
+        s.name = name;
+        s.category = category;
+        s.active = active;
+      } else {
+        const id = "s" + Date.now().toString(36);
+        state.staff.push({ id, name, category, active });
+        state.items.push(...createStaffChecklistItems(id, state.currentUserId));
+        staffTab = category;
+      }
+      saveState();
+      modalState = null;
+      render();
+    });
+  }
+
   const ifSubmit = panel.querySelector("#if-submit");
   if (ifSubmit) {
     ifSubmit.addEventListener("click", () => {
@@ -813,6 +927,43 @@ function renderModalPanel() {
       addChecklistItemDefinition(categoryId, label);
       modalState = null;
       render();
+    });
+  }
+
+  const pdSubmit = panel.querySelector("#pd-submit");
+  if (pdSubmit) {
+    pdSubmit.addEventListener("click", () => {
+      const name = panel.querySelector("#pd-name").value.trim();
+      if (!name) return;
+      const createdAt = panel.querySelector("#pd-created").value || todayStr();
+      const auditIntervalMonths = parseInt(panel.querySelector("#pd-interval").value, 10) || 9;
+      state.pflegedienste.push({ id: "pd" + Date.now().toString(36), name, createdAt, auditIntervalMonths });
+      saveState();
+      modalState = null;
+      render();
+    });
+  }
+
+  const pdfScope = panel.querySelector("#pdf-scope");
+  if (pdfScope) {
+    pdfScope.addEventListener("change", (e) => {
+      modalState.scope = e.target.value;
+      modalState.scopeValue = modalState.scope === "patient" ? (state.patients[0] ? state.patients[0].id : "") : modalState.scope === "category" ? "akte" : "";
+      render();
+    });
+  }
+  const pdfScopeValue = panel.querySelector("#pdf-scopevalue");
+  if (pdfScopeValue) {
+    pdfScopeValue.addEventListener("change", (e) => {
+      modalState.scopeValue = e.target.value;
+      render();
+    });
+  }
+  const pdfPrint = panel.querySelector("#pdf-print");
+  if (pdfPrint) {
+    pdfPrint.addEventListener("click", () => {
+      document.getElementById("print-area").innerHTML = printReportHtml(modalState.scope || "all", modalState.scopeValue || "");
+      window.print();
     });
   }
 
@@ -850,18 +1001,54 @@ function patientFormHtml(existing) {
   `;
 }
 
-function newItemFormHtml() {
+function staffFormHtml(existing) {
+  const isEdit = !!existing;
+  const defaultCategory = isEdit ? existing.category : modalState.category || STAFF_CATEGORIES[0].id;
   return `
     <div class="panel-header">
-      <div><h2>Neuer Checklistpunkt</h2><div class="page-sub">Wordt toegevoegd voor alle bestaande patiënten/medewerkers in deze categorie</div></div>
+      <div><h2>${isEdit ? "Personal bearbeiten" : "Neues Personal"}</h2><div class="page-sub">${isEdit ? existing.name : "Legt automatisch die Standard-Personalpunkte an"}</div></div>
+      <button class="panel-close" id="modal-close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="field-row">
+        <span class="field-label">Name</span>
+        <input type="text" id="sf-name" value="${isEdit ? existing.name : ""}" style="${INPUT_STYLE}" placeholder="Vor- und Nachname" />
+      </div>
+      <div class="field-row">
+        <span class="field-label">Kategorie</span>
+        <select id="sf-category" style="${INPUT_STYLE}">
+          ${STAFF_CATEGORIES.map((c) => `<option value="${c.id}" ${defaultCategory === c.id ? "selected" : ""}>${c.label}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Status</span>
+        <select id="sf-active" style="${INPUT_STYLE}">
+          <option value="true" ${!isEdit || existing.active ? "selected" : ""}>Aktiv</option>
+          <option value="false" ${isEdit && !existing.active ? "selected" : ""}>Inaktiv</option>
+        </select>
+      </div>
+      <button class="btn primary" id="sf-submit">${isEdit ? "Speichern" : "Personal anlegen"}</button>
+    </div>
+  `;
+}
+
+function newItemFormHtml() {
+  const categoryIds = modalState.categoryIds || ["akte", "verwaltung"];
+  const options = state.categories.filter((c) => categoryIds.includes(c.id));
+  const showSelect = options.length > 1;
+  return `
+    <div class="panel-header">
+      <div><h2>Neuer Checklistpunkt</h2><div class="page-sub">Wordt toegevoegd voor alle bestaande patiënten/personeel in deze categorie</div></div>
       <button class="panel-close" id="modal-close">✕</button>
     </div>
     <div class="panel-body">
       <div class="field-row">
         <span class="field-label">Kategorie</span>
-        <select id="if-category" style="${INPUT_STYLE}">
-          ${state.categories.map((c) => `<option value="${c.id}">${c.label}</option>`).join("")}
-        </select>
+        ${
+          showSelect
+            ? `<select id="if-category" style="${INPUT_STYLE}">${options.map((c) => `<option value="${c.id}">${c.label}</option>`).join("")}</select>`
+            : `<input type="hidden" id="if-category" value="${options[0].id}" /><div style="${INPUT_STYLE}background:var(--surface-2);">${options[0].label}</div>`
+        }
       </div>
       <div class="field-row">
         <span class="field-label">Bezeichnung</span>
@@ -872,13 +1059,108 @@ function newItemFormHtml() {
   `;
 }
 
+function pflegedienstFormHtml() {
+  return `
+    <div class="panel-header">
+      <div><h2>Neuer Pflegedienst</h2><div class="page-sub">Startdatum + Intervall bepalen de countdown naar de eerstvolgende MD-controle</div></div>
+      <button class="panel-close" id="modal-close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="field-row">
+        <span class="field-label">Name</span>
+        <input type="text" id="pd-name" placeholder="z. B. Pflegedienst Musterstadt" style="${INPUT_STYLE}" />
+      </div>
+      <div class="field-row">
+        <span class="field-label">Erstellt am / Startdatum</span>
+        <input type="date" id="pd-created" value="${todayStr()}" style="${INPUT_STYLE}" />
+      </div>
+      <div class="field-row">
+        <span class="field-label">Intervall bis zur Kontrolle (Monate)</span>
+        <input type="number" id="pd-interval" value="9" min="1" max="36" style="${INPUT_STYLE}" />
+      </div>
+      <button class="btn primary" id="pd-submit">Dienst anlegen</button>
+    </div>
+  `;
+}
+
+/* ---------------- PDF-export / afdrukken ---------------- */
+
+function buildPrintSelection(scope, scopeValue) {
+  let items;
+  let title = "MD-READY – Gesamtübersicht Patientenakten";
+  if (scope === "patient") {
+    const p = state.patients.find((x) => x.id === scopeValue);
+    items = state.items.filter((it) => it.linkType === "patient" && it.linkId === scopeValue);
+    title = `MD-READY – Patientenakte: ${p ? p.name : ""}`;
+  } else if (scope === "category") {
+    items = state.items.filter((it) => it.category === scopeValue);
+    title = `MD-READY – Übersicht: ${categoryLabel(scopeValue)}`;
+  } else {
+    items = patientScopedItems();
+  }
+  return { title, items };
+}
+function printReportHtml(scope, scopeValue) {
+  const { title, items } = buildPrintSelection(scope, scopeValue);
+  const rows = items
+    .map(
+      (it) => `<tr>
+        <td>${it.label}</td><td>${categoryLabel(it.category)}</td><td>${itemLinkLabel(it)}</td>
+        <td>${it.assignees.map(userLabel).join(", ") || "–"}</td><td>${fmtDate(it.deadline)}</td><td>${statusLabel(it.status)}</td>
+      </tr>`
+    )
+    .join("");
+  return `
+    <h1>${title}</h1>
+    <p>Erstellt am ${fmtDate(todayStr())} · ${items.length} Punkte</p>
+    <table>
+      <thead><tr><th>Punkt</th><th>Kategorie</th><th>Bezug</th><th>Verantwortlich</th><th>Frist</th><th>Status</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6">Keine Punkte.</td></tr>'}</tbody>
+    </table>
+  `;
+}
+function pdfExportFormHtml() {
+  const scope = modalState.scope || "all";
+  const scopeValue = modalState.scopeValue || "";
+  return `
+    <div class="panel-header">
+      <div><h2>PDF-Export</h2><div class="page-sub">Voorbeeld — druk af of bewaar als PDF via het printvenster</div></div>
+      <button class="panel-close" id="modal-close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="field-row">
+        <span class="field-label">Bereik</span>
+        <select id="pdf-scope" style="${INPUT_STYLE}">
+          <option value="all" ${scope === "all" ? "selected" : ""}>Alle patiënten</option>
+          <option value="patient" ${scope === "patient" ? "selected" : ""}>Eén patiënt</option>
+          <option value="category" ${scope === "category" ? "selected" : ""}>Categorie</option>
+        </select>
+      </div>
+      ${
+        scope === "patient"
+          ? `<div class="field-row"><span class="field-label">Patiënt</span><select id="pdf-scopevalue" style="${INPUT_STYLE}">${state.patients.map((p) => `<option value="${p.id}" ${scopeValue === p.id ? "selected" : ""}>${p.name}</option>`).join("")}</select></div>`
+          : ""
+      }
+      ${
+        scope === "category"
+          ? `<div class="field-row"><span class="field-label">Categorie</span><select id="pdf-scopevalue" style="${INPUT_STYLE}">${state.categories.map((c) => `<option value="${c.id}" ${scopeValue === c.id ? "selected" : ""}>${c.label}</option>`).join("")}</select></div>`
+          : ""
+      }
+      <div class="field-row">
+        <span class="field-label">Voorbeeld</span>
+        <div class="pdf-preview">${printReportHtml(scope, scopeValue)}</div>
+      </div>
+      <button class="btn primary" id="pdf-print">Drucken / Als PDF exportieren</button>
+    </div>
+  `;
+}
+
 /* ---------------- CSV export ---------------- */
 
 function exportCsv() {
-  const rows = [["Punkt", "Kategorie", "Bezug", "Verantwortlich", "Frist", "Status", "Nachkontrolle"]];
-  visibleItems().forEach((it) => {
-    const nk = !it.nachkontrolleRequired ? "n/a" : it.nachkontrolleDone ? `bestätigt (${userLabel(it.nachkontrolleBy)})` : "ausstehend";
-    rows.push([it.label, categoryLabel(it.category), itemLinkLabel(it), it.assignees.map(userLabel).join("/"), it.deadline, statusLabel(it.status), nk]);
+  const rows = [["Punkt", "Kategorie", "Bezug", "Verantwortlich", "Frist", "Status"]];
+  patientScopedItems().forEach((it) => {
+    rows.push([it.label, categoryLabel(it.category), itemLinkLabel(it), it.assignees.map(userLabel).join("/"), it.deadline, statusLabel(it.status)]);
   });
   const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });

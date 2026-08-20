@@ -3,7 +3,7 @@
 // Ophogen bij elke wijziging aan de seed-data: bij een mismatch met de
 // opgeslagen localStorage-versie wordt automatisch opnieuw geseed, zodat
 // bezoekers na een update niet handmatig "Demo zurücksetzen" hoeven te klikken.
-const SEED_VERSION = 6;
+const SEED_VERSION = 8;
 
 function daysFromNow(n) {
   const d = new Date();
@@ -11,17 +11,31 @@ function daysFromNow(n) {
   d.setDate(d.getDate() + n);
   return d.toISOString().slice(0, 10);
 }
+function addMonths(dateStr, months) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString().slice(0, 10);
+}
 
 // Op moduleniveau (i.p.v. binnen seedState) zodat ook nieuw aangemaakte
-// patiënten/checklistpunten dezelfde standaard Patientenakte/Verwaltung-
-// structuur krijgen.
+// patiënten/personeelsleden/checklistpunten dezelfde standaardstructuur krijgen.
 const ITEM_DEFS = {
   akte: ["SIS", "Maßnahmenplan", "Risikoeinschätzung", "Pflegebericht", "Pflegevisite", "Medikamentenplan"],
   verwaltung: ["Verordnung", "Genehmigung", "Vertrag", "Kostenvoranschlag", "Leistungsnachweis", "Rechnung"],
   personal: ["Vertrag", "Zertifikat", "Führungszeugnis", "Einarbeitung dokumentiert", "Datenschutzerklärung"],
-  qm: ["Pflegeleitbild", "Organigramm", "Fortbildungskonzept", "Notfallkonzept"],
-  hygiene: ["Hygieneplan", "Desinfektionsplan", "Schutzausrüstung geprüft", "MRSA-Verfahrensanweisung"],
+  qm: ["Pflegeleitbild", "Organigramm", "Fortbildungskonzept", "Notfallkonzept", "Hygienekonzept-Verweis", "Datenschutzkonzept"],
+  hygiene: ["Hygieneplan", "Desinfektionsplan", "Schutzausrüstung geprüft", "MRSA-Verfahrensanweisung", "Hautschutzplan", "Entsorgungskonzept"],
 };
+
+// Kwalificatiecategorieën voor Personal — elk krijgt een eigen tabblad.
+const STAFF_CATEGORIES = [
+  { id: "examinierte", label: "Examinierte" },
+  { id: "lg1", label: "Pflegehelfer LG1" },
+  { id: "lg2", label: "Pflegehelfer LG2" },
+  { id: "hauswirtschaft", label: "Hauswirtschaft" },
+  { id: "verwaltung", label: "Verwaltung" },
+  { id: "azubi", label: "Auszubildende" },
+];
 
 function blankChecklistItem(id, category, label, linkType, linkId, assigneeId) {
   return {
@@ -32,13 +46,16 @@ function blankChecklistItem(id, category, label, linkType, linkId, assigneeId) {
     priority: "normal",
     deadline: daysFromNow(14),
     assignees: assigneeId ? [assigneeId] : [],
-    linkType,
+    linkType, // 'patient' | 'staff' | 'org'
     linkId,
     createdAt: daysFromNow(0),
     updatedAt: daysFromNow(0),
     completedAt: null,
     completedBy: null,
-    nachkontrolleRequired: true,
+    // Nachkontrolle (vier-ogen-controle) is op verzoek van de klant uitgeschakeld.
+    // De velden blijven in het datamodel staan (mocht dit later terugkomen),
+    // maar nachkontrolleRequired staat overal op false.
+    nachkontrolleRequired: false,
     nachkontrolleDone: false,
     nachkontrolleBy: null,
     nachkontrolleAt: null,
@@ -51,11 +68,15 @@ function blankChecklistItem(id, category, label, linkType, linkId, assigneeId) {
 function createPatientChecklistItems(patientId, assigneeId) {
   const items = [];
   ["akte", "verwaltung"].forEach((cat) => {
-    ITEM_DEFS[cat].forEach((label, idx) => {
+    ITEM_DEFS[cat].forEach((label) => {
       items.push(blankChecklistItem("np" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), cat, label, "patient", patientId, assigneeId));
     });
   });
   return items;
+}
+// Standaard Personal-checklistpunten voor een nieuw personeelslid.
+function createStaffChecklistItems(staffId, assigneeId) {
+  return ITEM_DEFS.personal.map((label) => blankChecklistItem("ns" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), "personal", label, "staff", staffId, assigneeId));
 }
 
 function seedState() {
@@ -86,10 +107,29 @@ function seedState() {
     { id: "p14", name: "Rolf Baumann", active: true, pflegegrad: "PG 3" },
   ];
 
+  // Personal: aparte entiteit los van de inlog-gebruikers (users) — dit zijn
+  // de daadwerkelijke personeelsleden waarvoor een personeelsdossier
+  // (Vertrag/Zertifikat/etc.) wordt bijgehouden, per kwalificatiecategorie.
+  const staffNames = {
+    examinierte: ["Petra Lindner", "Otto Krämer"],
+    lg1: ["Nadine Schröder", "Bilal Yildiz"],
+    lg2: ["Carmen Sailer", "Heinz Bergmann"],
+    hauswirtschaft: ["Rosa Delgado", "Ingo Thiel"],
+    verwaltung: ["Meike Vogt", "Kai Ostermann"],
+    azubi: ["Lina Sommer", "Noah Peters"],
+  };
+  const staff = [];
+  let staffIdCounter = 1;
+  STAFF_CATEGORIES.forEach((cat) => {
+    staffNames[cat.id].forEach((name) => {
+      staff.push({ id: "s" + staffIdCounter++, name, category: cat.id, active: true });
+    });
+  });
+
   const categories = [
     { id: "akte", label: "Patientenakte", scope: "patient", team: "pflege" },
     { id: "verwaltung", label: "Verwaltung / Abrechnung", scope: "patient", team: "verwaltung" },
-    { id: "personal", label: "Personal", scope: "employee", team: "verwaltung" },
+    { id: "personal", label: "Personal", scope: "staff", team: "verwaltung" },
     { id: "qm", label: "QM-Handbuch", scope: "org", team: null },
     { id: "hygiene", label: "Hygiene", scope: "org", team: null },
   ];
@@ -99,17 +139,6 @@ function seedState() {
   let itemId = 1;
   const items = [];
   const assignPool = users.map((u) => u.id);
-
-  // Vier-Augen-Prinzip: in de demo wordt de Nachkontrolle altijd door een
-  // Mitarbeiter-collega gedaan, nooit door de Admin (Nasrat) — dat is
-  // bewust geen adminrol, gewoon wie er als volgende in de rij staat.
-  let nkCounter = 0;
-  function pickNachkontrolleBy(completedById) {
-    const others = users.filter((u) => u.role !== "admin" && u.id !== completedById);
-    const chosen = others[nkCounter % others.length].id;
-    nkCounter++;
-    return chosen;
-  }
 
   // Per-patient profile: controls the mix of status/deadline so the demo
   // shows all three aggregate outcomes (Vollständig / Korrektur / Dringend).
@@ -133,7 +162,7 @@ function seedState() {
   function pushItems(categoryId, linkType, linkId, profile, assigneeOffset) {
     itemDefs[categoryId].forEach((label, idx) => {
       const status = profile ? profile.statuses[idx % profile.statuses.length] : (idx % 3 === 0 ? "open" : idx % 3 === 1 ? "in_progress" : "done");
-      const offset = profile ? profile.offsets[idx % profile.offsets.length] : [0, 5, 10, -2][idx % 4];
+      const offset = profile ? profile.offsets[idx % profile.offsets.length] : [0, 5, 10, -2, 8, -6][idx % 6];
       const deadline = daysFromNow(offset);
       const assignedTo = assignPool[(idx + assigneeOffset) % assignPool.length];
       items.push({
@@ -143,16 +172,15 @@ function seedState() {
         status,
         priority: idx === 0 ? "high" : "normal",
         deadline,
-        assignees: [assignedTo],
-        linkType, // 'patient' | 'employee' | 'org'
+        assignees: linkType === "org" ? [] : [assignedTo],
+        linkType, // 'patient' | 'staff' | 'org'
         linkId,
         createdAt: daysFromNow(-30),
         updatedAt: daysFromNow(-2),
         completedAt: status === "done" ? daysFromNow(Math.min(offset, -1)) : null,
         completedBy: status === "done" ? assignedTo : null,
-        // Vier-Augen-Prinzip: ein Punkt gilt erst als vollständig abgeschlossen,
-        // wenn eine zweite Person die Nachkontrolle bestätigt hat.
-        nachkontrolleRequired: true,
+        // Nachkontrolle staat uit (klantwens) — velden blijven aanwezig voor evt. later gebruik.
+        nachkontrolleRequired: false,
         nachkontrolleDone: false,
         nachkontrolleBy: null,
         nachkontrolleAt: null,
@@ -169,52 +197,12 @@ function seedState() {
     pushItems("verwaltung", "patient", p.id, profile, i + 1);
   });
 
-  users.forEach((u, i) => {
-    pushItems("personal", "employee", u.id, null, i);
+  staff.forEach((s, i) => {
+    pushItems("personal", "staff", s.id, null, i);
   });
 
   pushItems("qm", "org", null, null, 0);
   pushItems("hygiene", "org", null, null, 1);
-
-  // Anna Berger (p1) en Peter Wolff (p10) zijn de demo-voorbeelden van een
-  // volledig afgeronde (en na-gecontroleerde) patiëntenakte: alle
-  // "done"-items krijgen meteen een bevestigde Nachkontrolle door de andere gebruiker.
-  items
-    .filter((it) => (it.linkId === "p1" || it.linkId === "p10") && it.status === "done")
-    .forEach((it) => {
-      it.nachkontrolleDone = true;
-      it.nachkontrolleBy = pickNachkontrolleBy(it.completedBy);
-      it.nachkontrolleAt = daysFromNow(-1);
-    });
-  // Bij een paar andere afgeronde items laten we de Nachkontrolle bewust
-  // nog open staan, zodat dat statusonderscheid in de demo zichtbaar is.
-  items
-    .filter((it) => it.linkId === "p3" && it.status === "done")
-    .slice(0, 1)
-    .forEach((it) => {
-      it.nachkontrolleDone = true;
-      it.nachkontrolleBy = pickNachkontrolleBy(it.completedBy);
-      it.nachkontrolleAt = daysFromNow(-1);
-    });
-
-  // Ook buiten de patiëntendossiers een paar afgeronde punten met bevestigde
-  // Nachkontrolle, zodat Personal/QM/Hygiene niet kunstmatig op 0% blijven staan.
-  items
-    .filter((it) => ["personal", "qm", "hygiene"].includes(it.category) && it.status === "done")
-    .forEach((it) => {
-      it.nachkontrolleDone = true;
-      it.nachkontrolleBy = pickNachkontrolleBy(it.completedBy);
-      it.nachkontrolleAt = daysFromNow(-1);
-    });
-
-  const calls = [
-    { id: "call1", patientId: "p2", date: daysFromNow(-6), reason: "Terminverschiebung Pflegevisite", contact: "Tochter (Frau Vogel)", result: "Neuer Termin vereinbart", followUp: "Kalender aktualisiert" },
-    { id: "call2", patientId: "p4", date: daysFromNow(-3), reason: "Rückfrage Medikamentenplan", contact: "Hausarztpraxis", result: "Rezept wird nachgereicht", followUp: "Verordnung nachfordern" },
-    { id: "call3", patientId: "p3", date: daysFromNow(-1), reason: "Absage Termin wegen Krankenhaus", contact: "Patientin selbst", result: "Pflege pausiert bis Entlassung", followUp: "Wiederaufnahme prüfen" },
-    { id: "call4", patientId: "p7", date: daysFromNow(-7), reason: "Rückfrage Genehmigung Pflegekasse", contact: "Pflegekasse", result: "Unterlagen nachgereicht", followUp: "Antwort abwarten" },
-    { id: "call5", patientId: "p9", date: daysFromNow(-2), reason: "Absage wegen Krankheit Angehörige", contact: "Sohn (Herr Hartmann)", result: "Ersatztermin vereinbart", followUp: "Tourenplan anpassen" },
-    { id: "call6", patientId: "p12", date: daysFromNow(-14), reason: "Abmeldung — Pflege durch Angehörige übernommen", contact: "Ehefrau", result: "Betreuung beendet", followUp: "Akte archivieren" },
-  ];
 
   // A few illustrative comments
   const sisItem = items.find((it) => it.category === "akte" && it.label === "SIS" && it.linkId === "p1");
@@ -229,14 +217,25 @@ function seedState() {
     koenigItem.comments.push({ id: "c3", author: "nasrat", text: "Frist bereits überschritten, bitte heute noch erledigen.", createdAt: daysFromNow(-1) });
   }
 
+  // Pflegedienste: door de Admin beheerde lijst van klant-organisaties, elk
+  // met een aanmaakdatum en een interval (standaard 9 maanden) tot de
+  // eerstvolgende MD-controle. Lichte tracking in dit prototype — nog geen
+  // volledige technische multi-tenant scheiding (dat is architectuurwerk).
+  const pflegedienste = [
+    { id: "pd1", name: "MD-READY Demo Pflegedienst", createdAt: daysFromNow(-210), auditIntervalMonths: 9 },
+    { id: "pd2", name: "Pflegedienst Sonnenschein", createdAt: daysFromNow(-40), auditIntervalMonths: 9 },
+    { id: "pd3", name: "Pflegedienst Lindenhof", createdAt: daysFromNow(-260), auditIntervalMonths: 6 },
+  ];
+
   return {
     version: SEED_VERSION,
     tenant: { name: "MD-READY Demo Pflegedienst" },
     currentUserId: "nasrat",
     users,
     patients,
+    staff,
     categories,
     items,
-    calls,
+    pflegedienste,
   };
 }
