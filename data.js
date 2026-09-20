@@ -3,7 +3,7 @@
 // Ophogen bij elke wijziging aan de seed-data: bij een mismatch met de
 // opgeslagen localStorage-versie wordt automatisch opnieuw geseed, zodat
 // bezoekers na een update niet handmatig "Demo zurücksetzen" hoeven te klikken.
-const SEED_VERSION = 9;
+const SEED_VERSION = 10;
 
 function daysFromNow(n) {
   const d = new Date();
@@ -15,6 +15,40 @@ function addMonths(dateStr, months) {
   const d = new Date(dateStr + "T00:00:00");
   d.setMonth(d.getMonth() + months);
   return d.toISOString().slice(0, 10);
+}
+
+// ---------------------------------------------------------------------------
+// INSTALLATIE-INSTELLINGEN — dit is het enige blok dat per Pflegedienst wijzigt.
+// De applicatie draait vanaf een netwerkshare: bij het opstarten moet de
+// Pflegedienst al goed staan, de medewerker kiest alleen nog wie hij is.
+// Pas hieronder de naam en de datum van de laatste MD-controle aan.
+// ---------------------------------------------------------------------------
+const PFLEGEDIENST = {
+  name: "MD-READY Demo Pflegedienst",
+  createdAt: daysFromNow(-210), // in productie een vaste datum: "2025-11-14"
+  auditIntervalMonths: 9,
+};
+
+// SGB V — behandelingspflege per patiënt. Wat hier aanstaat, staat in de
+// namenlijst direct onder de naam, zodat bij de MD-controle in één oogopslag
+// zichtbaar is welke verrichtingen bij deze patiënt horen.
+const SGB_V_LEISTUNGEN = [
+  { id: "medigabe", label: "Medigabe", short: "Medi" },
+  { id: "augentropfen", label: "Augentropfengabe", short: "Augen" },
+  { id: "kompressionsstruempfe", label: "Kompressionsstrümpfe", short: "K-Strümpfe" },
+  { id: "kompressionsverbaende", label: "Kompressionsverbände", short: "K-Verbände" },
+  { id: "bz_messung", label: "BZ Messung", short: "BZ" },
+  { id: "insulingabe", label: "Insulingabe", short: "Insulin" },
+  { id: "wunde_akut", label: "Wundversorgung akut", short: "Wunde akut" },
+  { id: "wunde_chronisch", label: "Wundversorgung chronisch", short: "Wunde chron." },
+];
+function sgbVLabel(id) {
+  const l = SGB_V_LEISTUNGEN.find((x) => x.id === id);
+  return l ? l.label : id;
+}
+function sgbVShort(id) {
+  const l = SGB_V_LEISTUNGEN.find((x) => x.id === id);
+  return l ? l.short : id;
 }
 
 // Hygienehandbuch — letterlijke inhoudsopgave uit MD_READY_Kontrollsystem.xlsx,
@@ -151,20 +185,20 @@ function seedState() {
   ];
 
   const patients = [
-    { id: "p1", name: "Anna Berger", active: true, pflegegrad: "PG 3" },
-    { id: "p2", name: "Thomas Vogel", active: true, pflegegrad: "PG 2" },
-    { id: "p3", name: "Ingrid Schuster", active: true, pflegegrad: "PG 4" },
-    { id: "p4", name: "Klaus Weidner", active: true, pflegegrad: "PG 1" },
-    { id: "p5", name: "Helga Brandt", active: true, pflegegrad: "PG 2" },
-    { id: "p6", name: "Werner Fuchs", active: true, pflegegrad: "PG 3" },
-    { id: "p7", name: "Renate König", active: true, pflegegrad: "PG 5" },
-    { id: "p8", name: "Dieter Lang", active: true, pflegegrad: "PG 1" },
-    { id: "p9", name: "Ursula Hartmann", active: true, pflegegrad: "PG 4" },
-    { id: "p10", name: "Peter Wolff", active: true, pflegegrad: "PG 2" },
-    { id: "p11", name: "Brigitte Krause", active: true, pflegegrad: "PG 3" },
-    { id: "p12", name: "Manfred Zimmermann", active: false, pflegegrad: "PG 4" },
-    { id: "p13", name: "Elke Neumann", active: true, pflegegrad: "PG 1" },
-    { id: "p14", name: "Rolf Baumann", active: true, pflegegrad: "PG 3" },
+    { id: "p1", name: "Anna Berger", active: true, pflegegrad: "PG 3", sgbV: ["medigabe", "bz_messung", "insulingabe"] },
+    { id: "p2", name: "Thomas Vogel", active: true, pflegegrad: "PG 2", sgbV: ["medigabe"] },
+    { id: "p3", name: "Ingrid Schuster", active: true, pflegegrad: "PG 4", sgbV: ["kompressionsstruempfe", "wunde_chronisch"] },
+    { id: "p4", name: "Klaus Weidner", active: true, pflegegrad: "PG 1", sgbV: [] },
+    { id: "p5", name: "Helga Brandt", active: true, pflegegrad: "PG 2", sgbV: ["augentropfen", "medigabe"] },
+    { id: "p6", name: "Werner Fuchs", active: true, pflegegrad: "PG 3", sgbV: ["bz_messung", "insulingabe", "wunde_akut"] },
+    { id: "p7", name: "Renate König", active: true, pflegegrad: "PG 5", sgbV: ["medigabe", "kompressionsverbaende", "wunde_chronisch"] },
+    { id: "p8", name: "Dieter Lang", active: true, pflegegrad: "PG 1", sgbV: [] },
+    { id: "p9", name: "Ursula Hartmann", active: true, pflegegrad: "PG 4", sgbV: ["kompressionsstruempfe"] },
+    { id: "p10", name: "Peter Wolff", active: true, pflegegrad: "PG 2", sgbV: ["medigabe", "augentropfen"] },
+    { id: "p11", name: "Brigitte Krause", active: true, pflegegrad: "PG 3", sgbV: ["bz_messung"] },
+    { id: "p12", name: "Manfred Zimmermann", active: false, pflegegrad: "PG 4", sgbV: ["wunde_chronisch"] },
+    { id: "p13", name: "Elke Neumann", active: true, pflegegrad: "PG 1", sgbV: [] },
+    { id: "p14", name: "Rolf Baumann", active: true, pflegegrad: "PG 3", sgbV: ["medigabe", "kompressionsstruempfe", "bz_messung"] },
   ];
 
   // Personal: aparte entiteit los van de inlog-gebruikers (users) — dit zijn
@@ -279,25 +313,19 @@ function seedState() {
     koenigItem.comments.push({ id: "c3", author: "nasrat", text: "Frist bereits überschritten, bitte heute noch erledigen.", createdAt: daysFromNow(-1) });
   }
 
-  // Pflegedienste: door de Admin beheerde lijst van klant-organisaties, elk
-  // met een aanmaakdatum en een interval (standaard 9 maanden) tot de
-  // eerstvolgende MD-controle. Lichte tracking in dit prototype — nog geen
-  // volledige technische multi-tenant scheiding (dat is architectuurwerk).
-  const pflegedienste = [
-    { id: "pd1", name: "MD-READY Demo Pflegedienst", createdAt: daysFromNow(-210), auditIntervalMonths: 9 },
-    { id: "pd2", name: "Pflegedienst Sonnenschein", createdAt: daysFromNow(-40), auditIntervalMonths: 9 },
-    { id: "pd3", name: "Pflegedienst Lindenhof", createdAt: daysFromNow(-260), auditIntervalMonths: 6 },
-  ];
+  // Eén Pflegedienst per installatie (zie PFLEGEDIENST bovenaan dit bestand).
+  // De lijst met andere diensten is eruit: elke installatie op een netwerkshare
+  // is er één van één, en een overzicht van andermans controles hoort daar niet.
 
   return {
     version: SEED_VERSION,
-    tenant: { name: "MD-READY Demo Pflegedienst" },
-    currentUserId: "nasrat",
+    tenant: { name: PFLEGEDIENST.name },
+    pflegedienst: { ...PFLEGEDIENST },
+    currentUserId: null,
     users,
     patients,
     staff,
     categories,
     items,
-    pflegedienste,
   };
 }

@@ -6,7 +6,7 @@ let route = "dashboard";
 let activeFilters = { quick: null, patient: "", category: "", assignee: "", status: "" };
 let openItemId = null;
 let staffTab = "examinierte";
-// { kind: "patient-new"|"patient-edit"|"staff-new"|"staff-edit"|"item-new"|"pflegedienst-new"|"pdf-export", id?, category?, categoryIds?, scope?, scopeValue? }
+// { kind: "patient-new"|"patient-edit"|"staff-new"|"staff-edit"|"item-new"|"pdf-export", id?, category?, categoryIds?, scope?, scopeValue? }
 let modalState = null;
 
 function loadState() {
@@ -37,7 +37,8 @@ function currentUser() {
   return state.users.find((u) => u.id === state.currentUserId);
 }
 function isAdmin() {
-  return currentUser().role === "admin";
+  const u = currentUser();
+  return !!u && u.role === "admin";
 }
 function todayStr() {
   const d = new Date();
@@ -134,6 +135,15 @@ function pflegedienstInfo(pd) {
 function render() {
   const app = document.getElementById("app");
   app.innerHTML = "";
+
+  // Op een netwerkshare start iedereen dezelfde applicatie op. De Pflegedienst
+  // staat dan al goed; het enige wat de medewerker nog kiest is wie hij is,
+  // want elke afvinking en elke opmerking wordt op zijn naam vastgelegd.
+  if (!currentUser()) {
+    app.appendChild(renderUserPicker());
+    return;
+  }
+
   app.appendChild(renderSidebar());
 
   const main = document.createElement("div");
@@ -150,6 +160,46 @@ function render() {
 
   app.appendChild(renderOverlayAndPanel());
   app.appendChild(renderModalPanel());
+}
+
+// Aanmeldscherm — geen wachtwoord, geen echte authenticatie. Dit kiest alleen
+// namens wie er gewerkt wordt; de beveiliging komt in de architectuurfase.
+function renderUserPicker() {
+  const el = document.createElement("div");
+  el.className = "user-picker";
+  el.innerHTML = `
+    <div class="picker-card">
+      <div class="picker-brand">
+        <div class="brand-mark">M</div>
+        <div>
+          <div class="brand-name">MD-READY</div>
+          <div class="tenant-name">${state.tenant.name}</div>
+        </div>
+      </div>
+      <h1>Wer arbeitet heute?</h1>
+      <p class="picker-sub">Alle Eintragungen werden unter diesem Namen gespeichert.</p>
+      <div class="picker-grid">
+        ${state.users
+          .map(
+            (u) => `<button class="picker-btn" data-user="${u.id}">
+              <span class="picker-initials">${u.initials}</span>
+              <span class="picker-name">${u.name}</span>
+              <span class="picker-role">${u.roleLabel}</span>
+            </button>`
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+  el.querySelectorAll("[data-user]").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.currentUserId = b.dataset.user;
+      route = "dashboard";
+      saveState();
+      render();
+    })
+  );
+  return el;
 }
 
 function renderSidebar() {
@@ -180,9 +230,14 @@ function renderSidebar() {
     <div class="sidebar-footer">
       <div class="user-switch">
         <label>Angemeldet als</label>
-        <select id="user-select">
-          ${state.users.map((u) => `<option value="${u.id}" ${u.id === state.currentUserId ? "selected" : ""}>${u.name} — ${u.roleLabel}</option>`).join("")}
-        </select>
+        <div class="current-user">
+          <span class="picker-initials small">${currentUser().initials}</span>
+          <span>
+            <span class="cu-name">${currentUser().name}</span>
+            <span class="cu-role">${currentUser().roleLabel}</span>
+          </span>
+        </div>
+        <button class="theme-toggle" id="switch-user">Benutzer wechseln</button>
       </div>
       <button class="theme-toggle" id="theme-toggle">Hell / Dunkel</button>
       <button class="theme-toggle" id="reset-demo">Demo zurücksetzen</button>
@@ -195,8 +250,8 @@ function renderSidebar() {
       render();
     })
   );
-  el.querySelector("#user-select").addEventListener("change", (e) => {
-    state.currentUserId = e.target.value;
+  el.querySelector("#switch-user").addEventListener("click", () => {
+    state.currentUserId = null;
     saveState();
     render();
   });
@@ -249,29 +304,24 @@ function renderDashboard() {
         .join("")}
     </div>
 
-    <div class="page-header" style="margin-top:36px;">
-      <h3 style="font-family:var(--font-display);font-size:16px;margin:0;">Pflegedienste — MD-Kontrollen</h3>
-      ${isAdmin() ? '<button class="btn primary" id="new-pd-btn">+ Neuer Dienst</button>' : ""}
-    </div>
+    <h3 style="font-family:var(--font-display);font-size:16px;margin:36px 0 12px;">Nächste MD-Kontrolle</h3>
     <div class="pd-list">
-      ${state.pflegedienste
-        .map((pd) => {
-          const info = pflegedienstInfo(pd);
-          const overdueDienst = info.daysLeft < 0;
-          return `<div class="pd-card">
-            <div class="pd-head">
-              <span class="pd-name">${pd.name}</span>
-              <span class="pd-days ${overdueDienst ? "overdue" : ""}">${overdueDienst ? "Kontrolle überfällig" : info.daysLeft + " Tage bis Kontrolle"}</span>
-            </div>
-            <div class="progress-track"><div class="progress-fill ${overdueDienst ? "danger" : ""}" style="width:${info.pct}%"></div></div>
-            <div class="pd-meta">Erstellt am ${fmtDate(pd.createdAt)} · Intervall ${pd.auditIntervalMonths} Monate · Nächste Kontrolle ${fmtDate(info.nextDate)}</div>
-          </div>`;
-        })
-        .join("") || '<p style="color:var(--ink-muted);font-size:13px;">Noch keine Pflegedienste angelegt.</p>'}
+      ${(() => {
+        // Alleen de eigen Pflegedienst: deze installatie is er één van één.
+        const pd = state.pflegedienst;
+        const info = pflegedienstInfo(pd);
+        const late = info.daysLeft < 0;
+        return `<div class="pd-card">
+          <div class="pd-head">
+            <span class="pd-name">${pd.name}</span>
+            <span class="pd-days ${late ? "overdue" : ""}">${late ? "Kontrolle überfällig" : info.daysLeft + " Tage bis Kontrolle"}</span>
+          </div>
+          <div class="progress-track"><div class="progress-fill ${late ? "danger" : ""}" style="width:${info.pct}%"></div></div>
+          <div class="pd-meta">Letzte Prüfung ${fmtDate(pd.createdAt)} · Intervall ${pd.auditIntervalMonths} Monate · Nächste Kontrolle ${fmtDate(info.nextDate)}</div>
+        </div>`;
+      })()}
     </div>
   `;
-  const newPdBtn = wrap.querySelector("#new-pd-btn");
-  if (newPdBtn) newPdBtn.addEventListener("click", () => { modalState = { kind: "pflegedienst-new" }; render(); });
   return wrap;
 }
 
@@ -423,6 +473,17 @@ function cellDisplay(item) {
   return { symbol: "·", cls: "mx-open" };
 }
 
+// SGB V onder de naam in de patiëntenlijst. Afkortingen omdat de kolom smal is;
+// de volledige naam staat in de tooltip. "Keine" wordt uitgeschreven in plaats
+// van weggelaten, zodat leeg ook echt leeg betekent en niet "nog niet ingevuld".
+function sgbVTagsHtml(p) {
+  const ids = p.sgbV || [];
+  if (!ids.length) return `<span class="sgbv-tags"><span class="sgbv-tag none">SGB V: keine</span></span>`;
+  return `<span class="sgbv-tags" title="SGB V: ${ids.map(sgbVLabel).join(", ")}">${ids
+    .map((id) => `<span class="sgbv-tag">${sgbVShort(id)}</span>`)
+    .join("")}</span>`;
+}
+
 function renderPatients() {
   const wrap = document.createElement("div");
   wrap.innerHTML = `
@@ -469,6 +530,7 @@ function renderPatients() {
         <td class="name-cell" data-patient="${p.id}">
           <span class="pname">${p.name}</span>
           <span class="psub">${p.pflegegrad} · ${p.active ? "aktiv" : "inaktiv"}</span>
+          ${sgbVTagsHtml(p)}
           ${isAdmin() ? `<button class="edit-btn" data-edit-patient="${p.id}" title="Patient bearbeiten">✎</button>` : ""}
         </td>
         ${cells}
@@ -613,21 +675,83 @@ function renderSimpleDocPage(categoryId) {
   const nested = items.some((it) => it.level === 2);
   wrap.innerHTML = `
     <div class="page-header">
-      <div><h1>${cat.label}</h1><div class="page-sub">${doneCount} / ${items.length} vorhanden — einfache Ja/Nein-Checkliste</div></div>
+      <div><h1>${cat.label}</h1><div class="page-sub"><span id="doc-count">${doneCount} / ${items.length}</span> vorhanden — einfache Ja/Nein-Checkliste</div></div>
       ${isAdmin() ? '<button class="btn primary" id="new-doc-item-btn">+ Punkt hinzufügen</button>' : ""}
     </div>`;
+
+  const filterBar = document.createElement("div");
+  filterBar.className = "filter-bar";
+  filterBar.innerHTML = `
+    <input type="search" class="select-filter doc-search" id="doc-search" placeholder="Suchen — z. B. MRSA, Norovirus, §43" />
+    <select class="select-filter" id="doc-status">
+      <option value="">Alle Status</option>
+      <option value="done">Vorhanden</option>
+      <option value="open">Nicht vorhanden</option>
+    </select>
+    <button class="chip" id="doc-clear">Zurücksetzen</button>
+  `;
+  wrap.appendChild(filterBar);
+
   const list = document.createElement("div");
   list.className = "table-wrap";
   list.innerHTML = `
     <table>
       <thead><tr><th>Dokument</th><th>Status</th></tr></thead>
       <tbody>
-        ${items.map((it) => `<tr data-item="${it.id}" class="${nested ? (it.level === 2 ? "doc-sub" : "doc-chapter") : ""}"><td>${it.label}</td><td>${statusPillHtml(it)}</td></tr>`).join("") || `<tr><td colspan="2" style="text-align:center;color:var(--ink-muted);padding:20px;">Noch keine Einträge.</td></tr>`}
+        ${items.map((it) => `<tr data-item="${it.id}" data-label="${it.label.toLowerCase()}" data-status="${it.status === "done" ? "done" : "open"}" class="${nested ? (it.level === 2 ? "doc-sub" : "doc-chapter") : ""}"><td>${it.label}</td><td>${statusPillHtml(it)}</td></tr>`).join("") || `<tr><td colspan="2" style="text-align:center;color:var(--ink-muted);padding:20px;">Noch keine Einträge.</td></tr>`}
+        <tr id="doc-empty" style="display:none;"><td colspan="2" style="text-align:center;color:var(--ink-muted);padding:24px;">Keine Treffer.</td></tr>
       </tbody>
     </table>
   `;
   wrap.appendChild(list);
-  list.querySelectorAll("[data-item]").forEach((row) =>
+
+  // Filteren zonder render(): een volledige hertekening zou bij elke toetsaanslag
+  // de focus uit het zoekveld halen. Rijen worden hier alleen verborgen.
+  const rows = Array.from(list.querySelectorAll("tr[data-item]"));
+  const emptyRow = list.querySelector("#doc-empty");
+  const countEl = wrap.querySelector("#doc-count");
+  function applyDocFilter() {
+    const q = (wrap.querySelector("#doc-search").value || "").trim().toLowerCase();
+    const st = wrap.querySelector("#doc-status").value;
+    let shown = 0;
+    let shownDone = 0;
+    const keep = new Set();
+    rows.forEach((row) => {
+      const hit = (!q || row.dataset.label.includes(q)) && (!st || row.dataset.status === st);
+      if (hit) keep.add(row);
+    });
+    // Een subpunt zonder zijn hoofdstuk erboven is niet te plaatsen — "MRSA" kan
+    // onder Umgang mit Infektionen of onder Empfehlung RKI staan. Dus bij een
+    // treffer in een subpunt blijft de hoofdstukregel zichtbaar, als context.
+    if (nested) {
+      let chapter = null;
+      rows.forEach((row) => {
+        if (row.classList.contains("doc-chapter")) chapter = row;
+        // ... maar een hoofdstuk dat zelf niet aan het statusfilter voldoet blijft
+        // weg. Anders staat er bij "Nicht vorhanden" een regel die wél vorhanden is.
+        else if (keep.has(row) && chapter && (!st || chapter.dataset.status === st)) keep.add(chapter);
+      });
+    }
+    rows.forEach((row) => {
+      const visible = keep.has(row);
+      row.style.display = visible ? "" : "none";
+      if (visible) {
+        shown++;
+        if (row.dataset.status === "done") shownDone++;
+      }
+    });
+    emptyRow.style.display = shown ? "none" : "";
+    countEl.textContent = shown === rows.length ? `${doneCount} / ${rows.length}` : `${shownDone} / ${shown} gefiltert`;
+  }
+  wrap.querySelector("#doc-search").addEventListener("input", applyDocFilter);
+  wrap.querySelector("#doc-status").addEventListener("change", applyDocFilter);
+  wrap.querySelector("#doc-clear").addEventListener("click", () => {
+    wrap.querySelector("#doc-search").value = "";
+    wrap.querySelector("#doc-status").value = "";
+    applyDocFilter();
+  });
+
+  rows.forEach((row) =>
     row.addEventListener("click", () => {
       openItemId = row.dataset.item;
       modalState = null;
@@ -864,7 +988,6 @@ function renderModalPanel() {
   if (modalState.kind === "item-new") panel.innerHTML = newItemFormHtml();
   else if (modalState.kind === "patient-new" || modalState.kind === "patient-edit") panel.innerHTML = patientFormHtml(modalState.kind === "patient-edit" ? state.patients.find((p) => p.id === modalState.id) : null);
   else if (modalState.kind === "staff-new" || modalState.kind === "staff-edit") panel.innerHTML = staffFormHtml(modalState.kind === "staff-edit" ? state.staff.find((s) => s.id === modalState.id) : null);
-  else if (modalState.kind === "pflegedienst-new") panel.innerHTML = pflegedienstFormHtml();
   else if (modalState.kind === "pdf-export") panel.innerHTML = pdfExportFormHtml();
   frag.appendChild(panel);
 
@@ -882,14 +1005,17 @@ function renderModalPanel() {
       if (!name) return;
       const pflegegrad = panel.querySelector("#pf-pflegegrad").value;
       const active = panel.querySelector("#pf-active").value === "true";
+      const checked = Array.from(panel.querySelectorAll(".pf-sgbv:checked")).map((c) => c.value);
+      const sgbV = SGB_V_LEISTUNGEN.filter((l) => checked.includes(l.id)).map((l) => l.id);
       if (modalState.kind === "patient-edit") {
         const p = state.patients.find((x) => x.id === modalState.id);
         p.name = name;
         p.pflegegrad = pflegegrad;
         p.active = active;
+        p.sgbV = sgbV;
       } else {
         const id = "p" + Date.now().toString(36);
-        state.patients.push({ id, name, pflegegrad, active });
+        state.patients.push({ id, name, pflegegrad, active, sgbV });
         state.items.push(...createPatientChecklistItems(id, state.currentUserId));
       }
       saveState();
@@ -929,20 +1055,6 @@ function renderModalPanel() {
       const label = panel.querySelector("#if-label").value.trim();
       if (!label) return;
       addChecklistItemDefinition(categoryId, label);
-      modalState = null;
-      render();
-    });
-  }
-
-  const pdSubmit = panel.querySelector("#pd-submit");
-  if (pdSubmit) {
-    pdSubmit.addEventListener("click", () => {
-      const name = panel.querySelector("#pd-name").value.trim();
-      if (!name) return;
-      const createdAt = panel.querySelector("#pd-created").value || todayStr();
-      const auditIntervalMonths = parseInt(panel.querySelector("#pd-interval").value, 10) || 9;
-      state.pflegedienste.push({ id: "pd" + Date.now().toString(36), name, createdAt, auditIntervalMonths });
-      saveState();
       modalState = null;
       render();
     });
@@ -999,6 +1111,17 @@ function patientFormHtml(existing) {
           <option value="true" ${!isEdit || existing.active ? "selected" : ""}>Aktiv</option>
           <option value="false" ${isEdit && !existing.active ? "selected" : ""}>Inaktiv</option>
         </select>
+      </div>
+      <div class="field-row col">
+        <span class="field-label">SGB V — Behandlungspflege</span>
+        <div class="sgbv-picker">
+          ${SGB_V_LEISTUNGEN.map(
+            (l) => `<label class="sgbv-option">
+              <input type="checkbox" class="pf-sgbv" value="${l.id}" ${isEdit && (existing.sgbV || []).includes(l.id) ? "checked" : ""} />
+              <span>${l.label}</span>
+            </label>`
+          ).join("")}
+        </div>
       </div>
       <button class="btn primary" id="pf-submit">${isEdit ? "Speichern" : "Patient anlegen"}</button>
     </div>
@@ -1063,29 +1186,6 @@ function newItemFormHtml() {
   `;
 }
 
-function pflegedienstFormHtml() {
-  return `
-    <div class="panel-header">
-      <div><h2>Neuer Pflegedienst</h2><div class="page-sub">Startdatum + Intervall bepalen de countdown naar de eerstvolgende MD-controle</div></div>
-      <button class="panel-close" id="modal-close">✕</button>
-    </div>
-    <div class="panel-body">
-      <div class="field-row">
-        <span class="field-label">Name</span>
-        <input type="text" id="pd-name" placeholder="z. B. Pflegedienst Musterstadt" style="${INPUT_STYLE}" />
-      </div>
-      <div class="field-row">
-        <span class="field-label">Erstellt am / Startdatum</span>
-        <input type="date" id="pd-created" value="${todayStr()}" style="${INPUT_STYLE}" />
-      </div>
-      <div class="field-row">
-        <span class="field-label">Intervall bis zur Kontrolle (Monate)</span>
-        <input type="number" id="pd-interval" value="9" min="1" max="36" style="${INPUT_STYLE}" />
-      </div>
-      <button class="btn primary" id="pd-submit">Dienst anlegen</button>
-    </div>
-  `;
-}
 
 /* ---------------- PDF-export / afdrukken ---------------- */
 
