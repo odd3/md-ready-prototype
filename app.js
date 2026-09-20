@@ -607,6 +607,10 @@ function renderSimpleDocPage(categoryId) {
   const cat = state.categories.find((c) => c.id === categoryId);
   const items = state.items.filter((it) => it.category === categoryId && it.linkType === "org");
   const doneCount = items.filter((it) => it.status === "done").length;
+  // Het Hygienehandbuch heeft hoofdstukken met subpunten (uit het bronwerkboek);
+  // QM is een platte lijst. Alleen bij nesting hoofdstukken vet + subpunten inspringen,
+  // anders zou een platte lijst onnodig helemaal vet worden.
+  const nested = items.some((it) => it.level === 2);
   wrap.innerHTML = `
     <div class="page-header">
       <div><h1>${cat.label}</h1><div class="page-sub">${doneCount} / ${items.length} vorhanden — einfache Ja/Nein-Checkliste</div></div>
@@ -618,7 +622,7 @@ function renderSimpleDocPage(categoryId) {
     <table>
       <thead><tr><th>Dokument</th><th>Status</th></tr></thead>
       <tbody>
-        ${items.map((it) => `<tr data-item="${it.id}"><td>${it.label}</td><td>${statusPillHtml(it)}</td></tr>`).join("") || `<tr><td colspan="2" style="text-align:center;color:var(--ink-muted);padding:20px;">Noch keine Einträge.</td></tr>`}
+        ${items.map((it) => `<tr data-item="${it.id}" class="${nested ? (it.level === 2 ? "doc-sub" : "doc-chapter") : ""}"><td>${it.label}</td><td>${statusPillHtml(it)}</td></tr>`).join("") || `<tr><td colspan="2" style="text-align:center;color:var(--ink-muted);padding:20px;">Noch keine Einträge.</td></tr>`}
       </tbody>
     </table>
   `;

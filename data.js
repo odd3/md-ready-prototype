@@ -3,7 +3,7 @@
 // Ophogen bij elke wijziging aan de seed-data: bij een mismatch met de
 // opgeslagen localStorage-versie wordt automatisch opnieuw geseed, zodat
 // bezoekers na een update niet handmatig "Demo zurücksetzen" hoeven te klikken.
-const SEED_VERSION = 8;
+const SEED_VERSION = 9;
 
 function daysFromNow(n) {
   const d = new Date();
@@ -17,6 +17,59 @@ function addMonths(dateStr, months) {
   return d.toISOString().slice(0, 10);
 }
 
+// Hygienehandbuch — letterlijke inhoudsopgave uit MD_READY_Kontrollsystem.xlsx,
+// tabblad "Hygienehandbuch". Nummering, volgorde en nesting komen uit dat
+// bestand; elk punt heeft daar een eigen vinkje, ook de hoofdstukkoppen, dus
+// ze zijn hier allemaal afvinkbaar. Subpunten staan onder hun hoofdstuk.
+const HYGIENE_HANDBUCH = [
+  { no: "1", label: "Hygienekonzept" },
+  { no: "2", label: "Persönliche Hygiene" },
+  { no: "3", label: "Desinfektionsplan" },
+  { no: "4", label: "Umgang mit Infektionen" },
+  { no: "4.1", label: "MRGN" },
+  { no: "4.2", label: "MRSA" },
+  { no: "4.3", label: "VRE" },
+  { no: "4.4", label: "Coronavirus" },
+  { no: "4.5", label: "Norovirus" },
+  { no: "4.6", label: "Clostridium difficile" },
+  { no: "5", label: "Erregersteckbriefe" },
+  { no: "5.1", label: "Adenoviren" },
+  { no: "5.2", label: "C. difficile" },
+  { no: "5.3", label: "Campylobacter" },
+  { no: "5.4", label: "EHEC" },
+  { no: "5.5", label: "FSME" },
+  { no: "5.6", label: "Hantaviren" },
+  { no: "5.7", label: "Influenza" },
+  { no: "5.8", label: "Keuchhusten" },
+  { no: "5.9", label: "Krätze / Skabies" },
+  { no: "5.10", label: "Legionellen" },
+  { no: "5.11", label: "Masern" },
+  { no: "5.12", label: "Meningokokken" },
+  { no: "5.13", label: "MERS-CoV" },
+  { no: "5.14", label: "MRGN" },
+  { no: "5.15", label: "Mumps" },
+  { no: "5.16", label: "Noroviren" },
+  { no: "6", label: "Belehrung §43" },
+  { no: "7", label: "Vorgehen Erkrankung" },
+  { no: "8", label: "Empfehlung RKI" },
+  { no: "8.1", label: "Händehygiene" },
+  { no: "8.2", label: "Infektionen Gefäßkatheter" },
+  { no: "8.3", label: "Harnwegsinfektionen" },
+  { no: "8.4", label: "MRSA" },
+  { no: "8.5", label: "Nosokomiale Pneumonie" },
+  { no: "8.6", label: "Krankenhaushygiene" },
+  { no: "9", label: "Aufbereitung Wandspender" },
+  { no: "10", label: "Umgang Nadelverletzung" },
+  { no: "11", label: "MRSA und Abläufe" },
+  { no: "12", label: "Sicherheitsblätter" },
+];
+
+// Een checklistpunt is een string, of { label, level } als de nesting uit het
+// bronbestand zichtbaar moet blijven (level 2 = subpunt onder het hoofdstuk erboven).
+function itemDefEntry(def) {
+  return typeof def === "string" ? { label: def, level: 1 } : { label: def.label, level: def.level || 1 };
+}
+
 // Op moduleniveau (i.p.v. binnen seedState) zodat ook nieuw aangemaakte
 // patiënten/personeelsleden/checklistpunten dezelfde standaardstructuur krijgen.
 const ITEM_DEFS = {
@@ -24,7 +77,12 @@ const ITEM_DEFS = {
   verwaltung: ["Verordnung", "Genehmigung", "Vertrag", "Kostenvoranschlag", "Leistungsnachweis", "Rechnung"],
   personal: ["Vertrag", "Zertifikat", "Führungszeugnis", "Einarbeitung dokumentiert", "Datenschutzerklärung"],
   qm: ["Pflegeleitbild", "Organigramm", "Fortbildungskonzept", "Notfallkonzept", "Hygienekonzept-Verweis", "Datenschutzkonzept"],
-  hygiene: ["Hygieneplan", "Desinfektionsplan", "Schutzausrüstung geprüft", "MRSA-Verfahrensanweisung", "Hautschutzplan", "Entsorgungskonzept"],
+  // Uit het Kontrollsystem-werkboek; het nummer staat in het label zodat het
+  // ook in de CSV- en PDF-export terugkomt, waar geen inspringing bestaat.
+  hygiene: HYGIENE_HANDBUCH.map((e) => {
+    const sub = e.no.includes(".");
+    return { label: e.no + (sub ? " " : ". ") + e.label, level: sub ? 2 : 1 };
+  }),
 };
 
 // Kwalificatiecategorieën voor Personal — elk krijgt een eigen tabblad.
@@ -42,6 +100,7 @@ function blankChecklistItem(id, category, label, linkType, linkId, assigneeId) {
     id,
     category,
     label,
+    level: 1, // handmatig toegevoegde punten staan op hoofdstukniveau
     status: "open",
     priority: "normal",
     deadline: daysFromNow(14),
@@ -68,7 +127,8 @@ function blankChecklistItem(id, category, label, linkType, linkId, assigneeId) {
 function createPatientChecklistItems(patientId, assigneeId) {
   const items = [];
   ["akte", "verwaltung"].forEach((cat) => {
-    ITEM_DEFS[cat].forEach((label) => {
+    ITEM_DEFS[cat].forEach((def) => {
+      const { label } = itemDefEntry(def);
       items.push(blankChecklistItem("np" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), cat, label, "patient", patientId, assigneeId));
     });
   });
@@ -76,7 +136,7 @@ function createPatientChecklistItems(patientId, assigneeId) {
 }
 // Standaard Personal-checklistpunten voor een nieuw personeelslid.
 function createStaffChecklistItems(staffId, assigneeId) {
-  return ITEM_DEFS.personal.map((label) => blankChecklistItem("ns" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), "personal", label, "staff", staffId, assigneeId));
+  return ITEM_DEFS.personal.map((def) => blankChecklistItem("ns" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), "personal", itemDefEntry(def).label, "staff", staffId, assigneeId));
 }
 
 function seedState() {
@@ -160,7 +220,8 @@ function seedState() {
   };
 
   function pushItems(categoryId, linkType, linkId, profile, assigneeOffset) {
-    itemDefs[categoryId].forEach((label, idx) => {
+    itemDefs[categoryId].forEach((def, idx) => {
+      const { label, level } = itemDefEntry(def);
       const status = profile ? profile.statuses[idx % profile.statuses.length] : (idx % 3 === 0 ? "open" : idx % 3 === 1 ? "in_progress" : "done");
       const offset = profile ? profile.offsets[idx % profile.offsets.length] : [0, 5, 10, -2, 8, -6][idx % 6];
       const deadline = daysFromNow(offset);
@@ -169,6 +230,7 @@ function seedState() {
         id: "i" + itemId++,
         category: categoryId,
         label,
+        level,
         status,
         priority: idx === 0 ? "high" : "normal",
         deadline,
