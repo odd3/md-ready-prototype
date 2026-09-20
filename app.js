@@ -377,18 +377,41 @@ function renderChecklist() {
   const shownItems = filteredChecklistItems();
   const header = document.createElement("div");
   header.className = "page-header";
+  const patient = activeFilters.patient ? state.patients.find((x) => x.id === activeFilters.patient) : null;
   header.innerHTML = `
     <div>
-      <h1>Checkliste</h1>
-      <div class="page-sub">${shownItems.length} von ${visibleItems().length} Punkten sichtbar</div>
+      ${
+        patient
+          ? `<div class="patient-eyebrow">Checkliste</div>
+             <h1 class="patient-title">${patient.name}</h1>
+             <div class="page-sub">${patient.pflegegrad} · ${patient.active ? "aktiv" : "inaktiv"} · ${shownItems.length} von ${visibleItems().length} Punkten sichtbar</div>
+             ${sgbVTagsHtml(patient)}`
+          : `<h1>Checkliste</h1>
+             <div class="page-sub">${shownItems.length} von ${visibleItems().length} Punkten sichtbar</div>`
+      }
     </div>
-    <div style="display:flex;gap:8px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+      ${patient ? '<button class="btn" id="clear-patient">Alle Patienten</button>' : ""}
+      ${patient && isAdmin() ? '<button class="btn" id="edit-patient-btn">✎ Patient bearbeiten</button>' : ""}
       ${isAdmin() ? '<button class="btn" id="new-item-btn">+ Punkt hinzufügen</button>' : ""}
       ${isAdmin() ? '<button class="btn" id="pdf-export-btn">PDF Vorschau</button>' : ""}
       ${isAdmin() ? '<button class="btn primary" id="export-csv">Export (CSV)</button>' : ""}
     </div>
   `;
   wrap.appendChild(header);
+  const clearPatientBtn = header.querySelector("#clear-patient");
+  if (clearPatientBtn)
+    clearPatientBtn.addEventListener("click", () => {
+      activeFilters.patient = "";
+      render();
+    });
+  const editPatientBtn = header.querySelector("#edit-patient-btn");
+  if (editPatientBtn)
+    editPatientBtn.addEventListener("click", () => {
+      modalState = { kind: "patient-edit", id: patient.id };
+      openItemId = null;
+      render();
+    });
   const newItemBtn = header.querySelector("#new-item-btn");
   if (newItemBtn) {
     newItemBtn.addEventListener("click", () => {

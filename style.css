@@ -131,6 +131,17 @@ nav.primary a .ic { width: 16px; text-align: center; }
 .page-header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 22px; }
 .page-header h1 { font-family: var(--font-display); font-size: 24px; margin: 0; }
 .page-sub { color: var(--ink-muted); font-size: 13px; margin-top: 4px; }
+
+/* Werk je de checklist van één patiënt af, dan is de naam het onderwerp van de
+   pagina. Groot genoeg om vanaf een armlengte te zien in wiens dossier je zit —
+   in het verkeerde dossier werken is de vergissing die niemand mag maken. */
+.patient-eyebrow {
+  font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--ink-muted); margin-bottom: 2px;
+}
+.page-header h1.patient-title { font-size: 34px; line-height: 1.1; }
+.page-header .sgbv-tags { margin-top: 8px; }
+.page-header .sgbv-tag { font-size: 11px; padding: 2px 8px; }
 .btn {
   font-family: var(--font-body); font-size: 13px; font-weight: 600;
   border-radius: 7px; padding: 8px 14px; border: 1px solid var(--line);
