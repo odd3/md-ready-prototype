@@ -3,7 +3,18 @@
 const STORAGE_KEY = "mdready-demo-state-v1";
 let state = loadState();
 let route = "dashboard";
-let activeFilters = { quick: null, patient: "", category: "", assignee: "", status: "" };
+const EMPTY_FILTERS = { quick: [], patient: "", category: "", assignee: "", status: "" };
+let activeFilters = { ...EMPTY_FILTERS };
+
+// Welk filter hoort bij welk dashboardblok. De telling in het blok en de lijst
+// waar je op uitkomt moeten hetzelfde zijn, anders klopt het blok niet.
+const KPI_FILTERS = {
+  open: { quick: ["open"] },
+  done: { status: "done" },
+  today: { quick: ["today"] },
+  overdue: { quick: ["overdue"] },
+  mine: { quick: ["mine", "open"] },
+};
 let openItemId = null;
 let staffTab = "examinierte";
 // { kind: "patient-new"|"patient-edit"|"staff-new"|"staff-edit"|"item-new"|"pdf-export", id?, category?, categoryIds?, scope?, scopeValue? }
@@ -283,11 +294,21 @@ function renderDashboard() {
       </div>
     </div>
     <div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-value">${open.length}</div><div class="kpi-label">Offene Punkte</div></div>
-      <div class="kpi-card accent"><div class="kpi-value">${done.length}</div><div class="kpi-label">Abgeschlossen</div></div>
-      <div class="kpi-card warn"><div class="kpi-value">${dueToday.length}</div><div class="kpi-label">Heute fällig</div></div>
-      <div class="kpi-card danger"><div class="kpi-value">${overdue.length}</div><div class="kpi-label">Frist überschritten</div></div>
-      <div class="kpi-card"><div class="kpi-value">${my.filter((i) => !isFullyDone(i)).length}</div><div class="kpi-label">Meine Aufgaben</div></div>
+      ${[
+        { kpi: "open", cls: "", value: open.length, label: "Offene Punkte" },
+        { kpi: "done", cls: "accent", value: done.length, label: "Abgeschlossen" },
+        { kpi: "today", cls: "warn", value: dueToday.length, label: "Heute fällig" },
+        { kpi: "overdue", cls: "danger", value: overdue.length, label: "Frist überschritten" },
+        { kpi: "mine", cls: "", value: my.filter((i) => !isFullyDone(i)).length, label: "Meine Aufgaben" },
+      ]
+        .map(
+          (k) => `<button class="kpi-card ${k.cls}" data-kpi="${k.kpi}" title="${k.label} in der Checkliste öffnen">
+            <span class="kpi-value">${k.value}</span>
+            <span class="kpi-label">${k.label}</span>
+            <span class="kpi-go" aria-hidden="true">›</span>
+          </button>`
+        )
+        .join("")}
     </div>
     <h3 style="font-family:var(--font-display);font-size:16px;margin:0 0 12px;">Fortschritt pro Kategorie</h3>
     <div class="progress-list">
@@ -322,17 +343,44 @@ function renderDashboard() {
       })()}
     </div>
   `;
+  wrap.querySelectorAll("[data-kpi]").forEach((b) =>
+    b.addEventListener("click", () => {
+      activeFilters = { ...EMPTY_FILTERS, ...KPI_FILTERS[b.dataset.kpi] };
+      route = "checklist";
+      openItemId = null;
+      render();
+    })
+  );
   return wrap;
+}
+
+// De Checkliste toont alles wat deze gebruiker mag zien — ook Personal, QM en
+// Hygiene. Eerder was dit alleen patiëntgebonden, waardoor een dashboardblok
+// van 149 punten uitkwam op een lijst die er maar honderd kon tonen.
+function filteredChecklistItems() {
+  let items = visibleItems();
+  const today = todayStr();
+  const quick = activeFilters.quick || [];
+  if (quick.includes("mine")) items = items.filter((i) => i.assignees.includes(state.currentUserId));
+  if (quick.includes("open")) items = items.filter((i) => !isFullyDone(i));
+  if (quick.includes("today")) items = items.filter((i) => i.status !== "done" && i.deadline === today);
+  if (quick.includes("overdue")) items = items.filter((i) => i.status !== "done" && i.deadline < today);
+  if (activeFilters.category) items = items.filter((i) => i.category === activeFilters.category);
+  if (activeFilters.patient) items = items.filter((i) => i.linkType === "patient" && i.linkId === activeFilters.patient);
+  if (activeFilters.assignee) items = items.filter((i) => i.assignees.includes(activeFilters.assignee));
+  if (activeFilters.status) items = items.filter((i) => i.status === activeFilters.status);
+  return items;
 }
 
 function renderChecklist() {
   const wrap = document.createElement("div");
+  const shownItems = filteredChecklistItems();
   const header = document.createElement("div");
   header.className = "page-header";
   header.innerHTML = `
     <div>
       <h1>Checkliste</h1>
-      <div class="page-sub">Patientenakte — ${patientScopedItems().length} Punkte sichtbar</div>
+      <div class="page-sub">${shownItems.length} von ${visibleItems().length} Punkten sichtbar</div>
     </div>
     <div style="display:flex;gap:8px;">
       ${isAdmin() ? '<button class="btn" id="new-item-btn">+ Punkt hinzufügen</button>' : ""}
@@ -364,25 +412,18 @@ function renderChecklist() {
     { id: "mine", label: "Meine Aufgaben" },
     { id: "open", label: "Offen" },
     { id: "today", label: "Heute" },
+    { id: "overdue", label: "Überfällig" },
   ];
   filterBar.innerHTML = `
-    ${quickFilters.map((f) => `<button class="chip ${activeFilters.quick === f.id ? "active" : ""}" data-quick="${f.id}">${f.label}</button>`).join("")}
-    <select class="select-filter" id="f-category"><option value="">Alle Kategorien</option>${patientCategories().map((c) => `<option value="${c.id}" ${activeFilters.category === c.id ? "selected" : ""}>${c.label}</option>`).join("")}</select>
+    ${quickFilters.map((f) => `<button class="chip ${activeFilters.quick.includes(f.id) ? "active" : ""}" data-quick="${f.id}">${f.label}</button>`).join("")}
+    <select class="select-filter" id="f-category"><option value="">Alle Kategorien</option>${visibleCategories().map((c) => `<option value="${c.id}" ${activeFilters.category === c.id ? "selected" : ""}>${c.label}</option>`).join("")}</select>
     <select class="select-filter" id="f-patient"><option value="">Alle Patienten</option>${state.patients.map((p) => `<option value="${p.id}" ${activeFilters.patient === p.id ? "selected" : ""}>${p.name}</option>`).join("")}</select>
     <select class="select-filter" id="f-assignee"><option value="">Alle Verantwortlichen</option>${state.users.map((u) => `<option value="${u.id}" ${activeFilters.assignee === u.id ? "selected" : ""}>${u.name}</option>`).join("")}</select>
     <select class="select-filter" id="f-status"><option value="">Alle Status</option><option value="open" ${activeFilters.status === "open" ? "selected" : ""}>Offen</option><option value="in_progress" ${activeFilters.status === "in_progress" ? "selected" : ""}>In Bearbeitung</option><option value="done" ${activeFilters.status === "done" ? "selected" : ""}>Abgeschlossen</option></select>
   `;
   wrap.appendChild(filterBar);
 
-  let items = patientScopedItems();
-  const today = todayStr();
-  if (activeFilters.quick === "mine") items = items.filter((i) => i.assignees.includes(state.currentUserId));
-  if (activeFilters.quick === "open") items = items.filter((i) => !isFullyDone(i));
-  if (activeFilters.quick === "today") items = items.filter((i) => i.status !== "done" && i.deadline === today);
-  if (activeFilters.category) items = items.filter((i) => i.category === activeFilters.category);
-  if (activeFilters.patient) items = items.filter((i) => i.linkType === "patient" && i.linkId === activeFilters.patient);
-  if (activeFilters.assignee) items = items.filter((i) => i.assignees.includes(activeFilters.assignee));
-  if (activeFilters.status) items = items.filter((i) => i.status === activeFilters.status);
+  const items = shownItems;
 
   const tableWrap = document.createElement("div");
   tableWrap.className = "table-wrap";
@@ -410,7 +451,10 @@ function renderChecklist() {
 
   wrap.querySelectorAll("[data-quick]").forEach((b) =>
     b.addEventListener("click", () => {
-      activeFilters.quick = activeFilters.quick === b.dataset.quick ? null : b.dataset.quick;
+      const q = activeFilters.quick;
+      const at = q.indexOf(b.dataset.quick);
+      if (at === -1) q.push(b.dataset.quick);
+      else q.splice(at, 1);
       render();
     })
   );
@@ -554,7 +598,7 @@ function renderPatients() {
 
   matrixWrap.querySelectorAll("[data-patient]").forEach((cell) =>
     cell.addEventListener("click", () => {
-      activeFilters = { quick: null, patient: cell.dataset.patient, category: "", assignee: "", status: "" };
+      activeFilters = { ...EMPTY_FILTERS, patient: cell.dataset.patient };
       route = "checklist";
       render();
     })
@@ -800,11 +844,75 @@ function renderAdmin() {
 
 /* ---------------- Item detail panel ---------------- */
 
+/* ---------------- Leespaneel rechts (Outlook-stijl) ---------------- */
+
+const PANEL_PREFS_KEY = "mdready-panel-v1";
+const PANEL_MIN = 320;
+const PANEL_MAX = 720;
+let panelCollapsed = false;
+let panelWidth = 420;
+
+function loadPanelPrefs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PANEL_PREFS_KEY) || "{}");
+    if (typeof raw.collapsed === "boolean") panelCollapsed = raw.collapsed;
+    if (typeof raw.width === "number") panelWidth = clampPanelWidth(raw.width);
+  } catch (e) {
+    /* voorkeuren zijn niet belangrijk genoeg om het opstarten te laten mislukken */
+  }
+  applyPanelWidth();
+}
+function savePanelPrefs() {
+  try {
+    localStorage.setItem(PANEL_PREFS_KEY, JSON.stringify({ collapsed: panelCollapsed, width: panelWidth }));
+  } catch (e) {
+    /* privémodus: dan onthoudt hij het deze keer niet */
+  }
+}
+// Alleen op een breed scherm staat het paneel náást de lijst; daaronder schuift
+// het er nog overheen en heeft inklappen geen betekenis — je zou een leeg
+// paneel overhouden. Zelfde grens als in de stylesheet.
+function isPanelDocked() {
+  return window.matchMedia("(min-width: 861px)").matches;
+}
+function clampPanelWidth(w) {
+  return Math.max(PANEL_MIN, Math.min(PANEL_MAX, Math.round(w)));
+}
+function applyPanelWidth() {
+  document.documentElement.style.setProperty("--panel-width", panelWidth + "px");
+}
+
+// Slepen aan de linkerrand. Tijdens het slepen wordt alleen de CSS-variabele
+// bijgewerkt — render() aanroepen per muisbeweging zou het paneel opnieuw
+// opbouwen en het slepen afbreken.
+function startPanelResize(e) {
+  e.preventDefault();
+  const startX = e.clientX;
+  const startWidth = panelWidth;
+  document.body.classList.add("resizing-panel");
+  const onMove = (ev) => {
+    panelWidth = clampPanelWidth(startWidth + (startX - ev.clientX));
+    applyPanelWidth();
+  };
+  const onUp = () => {
+    document.body.classList.remove("resizing-panel");
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    savePanelPrefs();
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
 function renderOverlayAndPanel() {
-  const frag = document.createElement("div");
+  // Een fragment, geen <div>: overlay en paneel worden zo directe kinderen van
+  // #app en kan het paneel als kolom naast de inhoud staan in plaats van erover.
+  const frag = document.createDocumentFragment();
   const item = state.items.find((i) => i.id === openItemId);
 
   const overlay = document.createElement("div");
+  // De grijze laag hoort bij de smalle schermen, waar het paneel nog wel
+  // over de lijst schuift; op een breed scherm staat het ernaast.
   overlay.className = "overlay" + (item ? " open" : "");
   overlay.addEventListener("click", () => {
     openItemId = null;
@@ -813,7 +921,23 @@ function renderOverlayAndPanel() {
   frag.appendChild(overlay);
 
   const panel = document.createElement("div");
-  panel.className = "panel" + (item ? " open" : "");
+  const collapsed = !!item && panelCollapsed && isPanelDocked();
+  panel.className = "panel" + (item ? " open" : "") + (collapsed ? " collapsed" : "");
+  if (collapsed) {
+    // Ingeschoven: een smalle rand die laat zien dat er iets openstaat.
+    panel.innerHTML = `
+      <button class="panel-rail" id="panel-expand" title="Detailbereich ausklappen">
+        <span class="rail-chevron">‹</span>
+        <span class="rail-text">${item.label}</span>
+      </button>`;
+    panel.querySelector("#panel-expand").addEventListener("click", () => {
+      panelCollapsed = false;
+      savePanelPrefs();
+      render();
+    });
+    frag.appendChild(panel);
+    return frag;
+  }
   if (item) {
     const dl = deadlineInfo(item.deadline, item.status);
     const simple = isSimpleDocCategory(item.category);
@@ -823,7 +947,10 @@ function renderOverlayAndPanel() {
           <h2>${item.label}</h2>
           <div class="page-sub">${categoryLabel(item.category)} · ${itemLinkLabel(item)}</div>
         </div>
-        <button class="panel-close" id="panel-close">✕</button>
+        <div class="panel-actions">
+          <button class="panel-close" id="panel-collapse" title="Detailbereich einklappen">›</button>
+          <button class="panel-close" id="panel-close" title="Schließen">✕</button>
+        </div>
       </div>
       <div class="panel-body">
         <div class="field-row">
@@ -882,6 +1009,11 @@ function renderOverlayAndPanel() {
       </div>
     `;
 
+    panel.querySelector("#panel-collapse").addEventListener("click", () => {
+      panelCollapsed = true;
+      savePanelPrefs();
+      render();
+    });
     panel.querySelector("#panel-close").addEventListener("click", () => {
       openItemId = null;
       render();
@@ -934,6 +1066,13 @@ function renderOverlayAndPanel() {
     panel.querySelector("#comment-input").addEventListener("keydown", (e) => {
       if (e.key === "Enter") addComment(item);
     });
+
+    // Na het vullen van innerHTML, anders wordt de greep er meteen weer uit gegooid.
+    const resizer = document.createElement("div");
+    resizer.className = "panel-resizer";
+    resizer.title = "Breite ziehen";
+    resizer.addEventListener("mousedown", startPanelResize);
+    panel.appendChild(resizer);
   }
   frag.appendChild(panel);
   return frag;
@@ -1263,7 +1402,7 @@ function pdfExportFormHtml() {
 
 function exportCsv() {
   const rows = [["Punkt", "Kategorie", "Bezug", "Verantwortlich", "Frist", "Status"]];
-  patientScopedItems().forEach((it) => {
+  filteredChecklistItems().forEach((it) => {
     rows.push([it.label, categoryLabel(it.category), itemLinkLabel(it), it.assignees.map(userLabel).join("/"), it.deadline, statusLabel(it.status)]);
   });
   const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\n");
@@ -1276,4 +1415,5 @@ function exportCsv() {
   URL.revokeObjectURL(url);
 }
 
+loadPanelPrefs();
 render();
