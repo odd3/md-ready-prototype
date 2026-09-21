@@ -1,7 +1,12 @@
-/* MD-READY Prototyp — Frontend-only Demo (kein Backend, localStorage) */
+/* MD-READY Prototyp — geen backend; de gegevens staan in een map op het
+   netwerk (zie storage.js) of, als terugvaloptie, in deze browser. */
 
 const STORAGE_KEY = "mdready-demo-state-v1";
-let state = loadState();
+const MODE_KEY = "mdready-storage-mode";
+// Wie je bent hoort bij deze werkplek, niet bij het gedeelde bestand: anders
+// erft de volgende die het opent de naam van de vorige.
+const USER_KEY = "mdready-current-user";
+let state = null;
 let route = "dashboard";
 const EMPTY_FILTERS = { quick: [], patient: "", category: "", assignee: "", status: "" };
 let activeFilters = { ...EMPTY_FILTERS };
@@ -20,7 +25,29 @@ let staffTab = "examinierte";
 // { kind: "patient-new"|"patient-edit"|"staff-new"|"staff-edit"|"item-new"|"pdf-export", id?, category?, categoryIds?, scope?, scopeValue? }
 let modalState = null;
 
-function loadState() {
+/* ---------------- Opslag: netwerkmap of deze browser ---------------- */
+
+let storageMode = "none"; // "none" | "file" | "local"
+let storageDir = null;
+let storageDirName = "";
+let storageReadOnly = false;
+let storageNote = "";
+let storageError = "";
+let saveStatus = "idle"; // "idle" | "saving" | "saved" | "error"
+let lockConflict = null;
+let lockSince = null;
+let lockHeld = false;
+let takenOverBy = null;
+let wasTakenOver = false;
+let handoverFile = null;
+let savedHandleName = null;
+const sessionId = newSessionId();
+let lockTimer = null;
+let writeTimer = null;
+let writePending = false;
+let writeInFlight = false;
+
+function loadLocalState() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw) {
     try {
@@ -34,27 +61,254 @@ function loadState() {
   }
   return seedState();
 }
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+
+// Wat er naar het gedeelde bestand gaat. De ingelogde naam blijft eruit; die
+// hoort bij de werkplek en niet bij de administratie.
+function stateForFile() {
+  return { ...state, currentUserId: null };
 }
+
+function saveState() {
+  if (storageReadOnly) return;
+  if (storageMode === "file") {
+    scheduleFileWrite();
+    return;
+  }
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (e) {
+    storageError = "Speichern im Browser nicht möglich.";
+  }
+}
+
+// Schrijven wordt even opgespaard: één vinkje zetten is drie aanrakingen van
+// de state, en dan is één keer wegschrijven genoeg.
+function scheduleFileWrite() {
+  writePending = true;
+  setSaveStatus("saving");
+  clearTimeout(writeTimer);
+  writeTimer = setTimeout(flushFileWrite, 500);
+}
+async function flushFileWrite() {
+  if (writeInFlight) {
+    // Nooit twee schrijfacties tegelijk op hetzelfde bestand.
+    clearTimeout(writeTimer);
+    writeTimer = setTimeout(flushFileWrite, 300);
+    return;
+  }
+  if (!storageDir || storageReadOnly) return;
+  writeInFlight = true;
+  try {
+    const lock = await readLock(storageDir);
+    if (lock && lock.sessionId !== sessionId) {
+      // Overgenomen terwijl wij nog iets klaar hadden staan.
+      await handleTakenOver(lock);
+      return;
+    }
+    await writeDataFile(storageDir, stateForFile());
+    writePending = false;
+    storageError = "";
+    setSaveStatus("saved");
+  } catch (e) {
+    storageError = e.message || "Schreiben fehlgeschlagen.";
+    setSaveStatus("error");
+  } finally {
+    writeInFlight = false;
+  }
+}
+// Alleen het lampje bijwerken. render() zou het hele scherm opnieuw opbouwen
+// en de cursor uit een invoerveld halen terwijl iemand aan het typen is.
+function setSaveStatus(status) {
+  saveStatus = status;
+  const el = document.getElementById("save-indicator");
+  if (el) el.outerHTML = saveIndicatorHtml();
+}
+function saveIndicatorHtml() {
+  const txt = {
+    idle: storageReadOnly ? "Nur Lesen" : "Bereit",
+    saving: "Speichert …",
+    saved: "Gespeichert",
+    error: "Nicht gespeichert",
+  }[saveStatus];
+  const icon = { idle: "·", saving: "⟳", saved: "✓", error: "!" }[saveStatus];
+  return `<div id="save-indicator" class="save-indicator ${saveStatus}" title="${storageError || ""}">${icon} ${txt}</div>`;
+}
+
+async function connectFolder(dir) {
+  storageDir = dir;
+  storageDirName = dir.name || "Datenordner";
+  storageMode = "file";
+  storageError = "";
+  localStorage.setItem(MODE_KEY, "file");
+
+  const lock = await readLock(dir);
+  if (lock && !lock.stale && lock.sessionId !== sessionId) {
+    // Iemand anders heeft het open — de gebruiker kiest zelf wat er gebeurt.
+    lockConflict = lock;
+    storageReadOnly = true;
+    await loadFromFile();
+    return;
+  }
+  storageReadOnly = false;
+  await loadFromFile();
+  await writeDailyBackup(dir).catch(() => {});
+  await takeLock();
+}
+
+async function loadFromFile() {
+  const data = await readDataFile(storageDir);
+  if (data) {
+    state = data;
+    storageNote =
+      data.version === SEED_VERSION
+        ? ""
+        : `Die Datei stammt aus Version ${data.version}, diese Anwendung ist Version ${SEED_VERSION}. Die Daten wurden unverändert übernommen.`;
+  } else {
+    // Lege map: begin met de voorbeelddata en zet het bestand meteen neer.
+    state = seedState();
+    if (!storageReadOnly) await writeDataFile(storageDir, stateForFile());
+  }
+  state.currentUserId = sessionStorage.getItem(USER_KEY) || null;
+}
+
+async function takeLock() {
+  lockSince = lockSince || new Date().toISOString();
+  lockHeld = true;
+  takenOverBy = null;
+  wasTakenOver = false;
+  handoverFile = null;
+  await refreshLock();
+  clearInterval(lockTimer);
+  lockTimer = setInterval(() => heartbeat().catch(() => {}), LOCK_BEAT_MS);
+}
+async function refreshLock() {
+  if (storageMode !== "file" || storageReadOnly || !storageDir) return;
+  const u = currentUser();
+  await writeLock(storageDir, {
+    sessionId,
+    user: state ? state.currentUserId : null,
+    userName: u ? u.name : "—",
+    since: lockSince,
+  });
+}
+
+// Elke hartslag eerst kijken of de grendel nog van ons is. Een collega kan hem
+// hebben overgenomen omdat deze sessie ergens open bleef staan.
+async function heartbeat() {
+  if (storageMode !== "file" || storageReadOnly || !storageDir) return;
+  const lock = await readLock(storageDir);
+  if (lock && lock.sessionId !== sessionId) {
+    await handleTakenOver(lock);
+    return;
+  }
+  await refreshLock();
+}
+
+// Onze sessie is overgenomen. Vanaf nu niets meer naar het hoofdbestand
+// schrijven — daar werkt een ander in. Wat hier nog niet was weggeschreven gaat
+// naar een apart bestand, zodat het niet verloren gaat en later is na te kijken.
+async function handleTakenOver(lock) {
+  storageReadOnly = true;
+  lockHeld = false;
+  wasTakenOver = true;
+  takenOverBy = lock.userName && lock.userName !== "—" ? lock.userName : null;
+  clearInterval(lockTimer);
+  clearTimeout(writeTimer);
+  if (writePending) {
+    try {
+      const u = currentUser();
+      handoverFile = await writeHandoverFile(storageDir, u ? u.name : "unbekannt", stateForFile());
+    } catch (e) {
+      storageError = "Nicht gespeicherte Änderungen konnten nicht gesichert werden.";
+    }
+    writePending = false;
+  }
+  setSaveStatus("idle");
+  render();
+}
+
+// Netjes afmelden: eerst wegschrijven, dan de grendel vrijgeven.
+async function releaseLock() {
+  clearInterval(lockTimer);
+  if (writePending) await flushFileWrite();
+  if (storageMode === "file" && lockHeld && storageDir) await clearLock(storageDir);
+  lockHeld = false;
+  lockSince = null;
+}
+
+// Terug aan het werk nadat de grendel is vrijgegeven — bijvoorbeeld na het
+// afmelden. Kan mislukken als iemand anders inmiddels binnen is.
+async function reacquireLock() {
+  if (storageMode !== "file" || lockHeld || !storageDir) return true;
+  const lock = await readLock(storageDir);
+  if (lock && !lock.stale && lock.sessionId !== sessionId) {
+    lockConflict = lock;
+    storageReadOnly = true;
+    return false;
+  }
+  storageReadOnly = false;
+  await takeLock();
+  return true;
+}
+
+function useLocalStorageMode() {
+  storageMode = "local";
+  storageReadOnly = false;
+  localStorage.setItem(MODE_KEY, "local");
+  state = loadLocalState();
+  state.currentUserId = sessionStorage.getItem(USER_KEY) || null;
+}
+
+async function boot() {
+  loadPanelPrefs();
+  const saved = await savedDirHandle();
+  if (saved) {
+    savedHandleName = saved.name;
+    // Alleen navragen, niet opnieuw vragen: daarvoor is een klik nodig.
+    if (await handlePermission(saved, false)) {
+      try {
+        await connectFolder(saved);
+      } catch (e) {
+        storageError = e.message;
+        storageMode = "none";
+      }
+    }
+  }
+  if (storageMode === "none" && localStorage.getItem(MODE_KEY) === "local") useLocalStorageMode();
+  render();
+}
+
+// De grendel weghalen bij het sluiten. Lukt dat niet — afsluiten geeft weinig
+// tijd — dan verloopt hij vanzelf door de stilte in de hartslag.
+window.addEventListener("pagehide", () => {
+  if (storageMode === "file" && lockHeld && storageDir) clearLock(storageDir);
+});
+window.addEventListener("beforeunload", (e) => {
+  if (writePending) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
 function resetDemo() {
-  if (!confirm("Demo-Daten zurücksetzen? Alle Änderungen gehen verloren.")) return;
+  const where = storageMode === "file" ? `Die Datei im Ordner "${storageDirName}" wird überschrieben.` : "Die Daten in diesem Browser werden überschrieben.";
+  if (!confirm("Demo-Daten zurücksetzen? Alle Änderungen gehen verloren.\n\n" + where)) return;
+  const user = state ? state.currentUserId : null;
   state = seedState();
+  state.currentUserId = user;
   saveState();
   render();
 }
 
 function currentUser() {
-  return state.users.find((u) => u.id === state.currentUserId);
+  return state && state.users.find((u) => u.id === state.currentUserId);
 }
 function isAdmin() {
   const u = currentUser();
   return !!u && u.role === "admin";
 }
 function todayStr() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.toISOString().slice(0, 10);
+  // Lokale kalenderdatum — zie isoDate() in data.js.
+  return isoDate(new Date());
 }
 function daysBetween(a, b) {
   return Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000);
@@ -147,6 +401,17 @@ function render() {
   const app = document.getElementById("app");
   app.innerHTML = "";
 
+  // Eerst: waar komen de gegevens vandaan. Zonder die keuze is er geen state.
+  if (storageMode === "none") {
+    app.appendChild(renderStorageSetup());
+    return;
+  }
+  // Iemand anders heeft het bestand open. Zelf kiezen wat er gebeurt.
+  if (lockConflict) {
+    app.appendChild(renderLockConflict());
+    return;
+  }
+
   // Op een netwerkshare start iedereen dezelfde applicatie op. De Pflegedienst
   // staat dan al goed; het enige wat de medewerker nog kiest is wie hij is,
   // want elke afvinking en elke opmerking wordt op zijn naam vastgelegd.
@@ -159,6 +424,16 @@ function render() {
 
   const main = document.createElement("div");
   main.className = "main";
+  if (storageReadOnly || storageNote || storageError) {
+    const banner = document.createElement("div");
+    banner.className = "storage-warning inline" + (storageReadOnly ? " strong" : "");
+    banner.textContent = storageReadOnly
+      ? wasTakenOver
+        ? `${takenOverBy ? takenOverBy + " hat" : "Eine andere Sitzung hat"} diesen Ordner übernommen. Ihre gespeicherte Arbeit steht im Ordner${handoverFile ? `, noch nicht gespeicherte Änderungen liegen in ${handoverFile}` : ""}. Sie können nur noch lesen.`
+        : "Nur-Lese-Modus — Änderungen werden nicht gespeichert."
+      : storageError || storageNote;
+    main.appendChild(banner);
+  }
   if (route === "dashboard") main.appendChild(renderDashboard());
   else if (route === "checklist") main.appendChild(renderChecklist());
   else if (route === "patients") main.appendChild(renderPatients());
@@ -171,6 +446,132 @@ function render() {
 
   app.appendChild(renderOverlayAndPanel());
   app.appendChild(renderModalPanel());
+}
+
+// Waar komen de gegevens vandaan? Eén keer kiezen; daarna onthoudt de browser
+// de map en komt dit scherm niet meer terug.
+function renderStorageSetup() {
+  const el = document.createElement("div");
+  el.className = "user-picker";
+  const reason = storageUnavailableReason();
+  el.innerHTML = `
+    <div class="picker-card">
+      <div class="picker-brand">
+        <div class="brand-mark">M</div>
+        <div>
+          <div class="brand-name">MD-READY</div>
+          <div class="tenant-name">Einrichtung</div>
+        </div>
+      </div>
+      <h1>Wo liegen die Daten?</h1>
+      <p class="picker-sub">Die Anwendung schreibt in einen Ordner auf Ihrem Netzlaufwerk. Die Daten verlassen das Haus nicht.</p>
+      ${storageError ? `<div class="storage-warning">${storageError}</div>` : ""}
+      ${reason ? `<div class="storage-warning">${reason}</div>` : ""}
+      <div class="storage-choices">
+        ${
+          reason
+            ? ""
+            : `<button class="btn primary" id="pick-folder">${savedHandleName ? `Mit Ordner „${savedHandleName}" verbinden` : "Ordner im Netzlaufwerk wählen"}</button>`
+        }
+        ${savedHandleName && !reason ? '<button class="btn" id="pick-other">Anderen Ordner wählen</button>' : ""}
+        <button class="btn" id="use-local">Nur auf diesem Computer (Demo)</button>
+      </div>
+      <p class="picker-footnote">„Nur auf diesem Computer" ist zum Ausprobieren: die Daten bleiben in diesem Browser und niemand sonst sieht sie.</p>
+    </div>
+  `;
+  const connect = async (chooseNew) => {
+    try {
+      storageError = "";
+      let dir = chooseNew ? null : await savedDirHandle();
+      if (dir) {
+        // Toestemming opnieuw vragen mag hier: we zitten in een klik.
+        if (!(await handlePermission(dir, true))) dir = null;
+      }
+      if (!dir) dir = await pickDataFolder();
+      await connectFolder(dir);
+      render();
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // gebruiker klikte de kiezer weg
+      storageError = e.message || String(e);
+      render();
+    }
+  };
+  const pick = el.querySelector("#pick-folder");
+  if (pick) pick.addEventListener("click", () => connect(false));
+  const other = el.querySelector("#pick-other");
+  if (other)
+    other.addEventListener("click", async () => {
+      await forgetDataFolder();
+      savedHandleName = null;
+      connect(true);
+    });
+  el.querySelector("#use-local").addEventListener("click", () => {
+    useLocalStorageMode();
+    render();
+  });
+  return el;
+}
+
+// Eén tegelijk. Wie als tweede komt ziet wie er al in zit en kiest zelf.
+function renderLockConflict() {
+  const el = document.createElement("div");
+  el.className = "user-picker";
+  const since = new Date(lockConflict.since || lockConflict.heartbeat);
+  const sinceTxt = since.toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const quietMin = Math.floor((Date.now() - new Date(lockConflict.heartbeat).getTime()) / 60000);
+  // Hoe lang er geen teken van leven was, is de informatie waarop je besluit of
+  // iemand echt weg is of gewoon even koffie haalt.
+  const quietTxt = quietMin < 1 ? "gerade eben" : quietMin < 60 ? `vor ${quietMin} Minuten` : `vor ${Math.floor(quietMin / 60)} Stunden`;
+  const abandoned = quietMin >= 2;
+  el.innerHTML = `
+    <div class="picker-card">
+      <h1>Die Datei ist in Benutzung</h1>
+      <p class="picker-sub">
+        <strong>${lockConflict.userName || "Jemand"}</strong> hat den Ordner seit ${sinceTxt} geöffnet.
+        Letztes Lebenszeichen: <strong>${quietTxt}</strong>.
+      </p>
+      ${
+        abandoned
+          ? `<div class="storage-warning">Seit ${quietTxt} keine Aktivität. Vermutlich wurde die Sitzung nicht richtig geschlossen — etwa weil der Rechner noch ansteht oder die Kollegin krank ist.</div>`
+          : `<div class="storage-warning">Es sieht so aus, als würde dort gerade gearbeitet. Bitte kurz nachfragen, bevor Sie übernehmen.</div>`
+      }
+      <div class="storage-choices">
+        <button class="btn ${abandoned ? "" : "primary"}" id="lock-read">Nur lesen — nichts wird gespeichert</button>
+        <button class="btn ${abandoned ? "primary" : ""}" id="lock-take">Sitzung übernehmen</button>
+      </div>
+      <p class="picker-footnote">
+        Beim Übernehmen wird nichts gelöscht: die gespeicherte Arbeit bleibt, und es wird zuerst eine Kopie abgelegt.
+        Die andere Sitzung merkt die Übernahme und kann danach nur noch lesen.
+      </p>
+    </div>
+  `;
+  el.querySelector("#lock-read").addEventListener("click", () => {
+    lockConflict = null;
+    storageReadOnly = true;
+    setSaveStatus("idle");
+    render();
+  });
+  el.querySelector("#lock-take").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "Übernimmt …";
+    try {
+      // Eerst een kopie van wat er staat, dan pas de grendel overnemen. Gaat er
+      // daarna iets mis, dan is dit het punt om op terug te vallen.
+      await snapshotDataFile(storageDir, "vor-uebernahme");
+      // Opnieuw inlezen: de ander kan in de tussentijd nog iets hebben opgeslagen.
+      await loadFromFile();
+      lockConflict = null;
+      storageReadOnly = false;
+      lockSince = new Date().toISOString();
+      await takeLock();
+      setSaveStatus("idle");
+    } catch (err) {
+      storageError = err.message || "Übernehmen fehlgeschlagen.";
+    }
+    render();
+  });
+  return el;
 }
 
 // Aanmeldscherm — geen wachtwoord, geen echte authenticatie. Dit kiest alleen
@@ -203,10 +604,20 @@ function renderUserPicker() {
     </div>
   `;
   el.querySelectorAll("[data-user]").forEach((b) =>
-    b.addEventListener("click", () => {
+    b.addEventListener("click", async () => {
       state.currentUserId = b.dataset.user;
       route = "dashboard";
-      saveState();
+      try {
+        sessionStorage.setItem(USER_KEY, b.dataset.user);
+      } catch (e) {
+        /* naam onthouden is meegenomen, niet noodzakelijk */
+      }
+      // Na afmelden is de grendel vrij; iemand anders kan er inmiddels in zitten.
+      const gotLock = await reacquireLock().catch(() => true);
+      if (gotLock) {
+        refreshLock().catch(() => {});
+        saveState();
+      }
       render();
     })
   );
@@ -249,6 +660,12 @@ function renderSidebar() {
           </span>
         </div>
         <button class="theme-toggle" id="switch-user">Benutzer wechseln</button>
+        <button class="theme-toggle" id="sign-off">Abmelden${storageMode === "file" ? " & freigeben" : ""}</button>
+      </div>
+      <div class="storage-badge">
+        <span class="sb-where">${storageMode === "file" ? "📁 " + storageDirName : "💻 Nur dieser Computer"}</span>
+        ${saveIndicatorHtml()}
+        <button class="linklike" id="change-storage">Ordner wechseln</button>
       </div>
       <button class="theme-toggle" id="theme-toggle">Hell / Dunkel</button>
       <button class="theme-toggle" id="reset-demo">Demo zurücksetzen</button>
@@ -261,8 +678,37 @@ function renderSidebar() {
       render();
     })
   );
+  el.querySelector("#change-storage").addEventListener("click", async () => {
+    if (writePending) await flushFileWrite();
+    await releaseLock();
+    storageMode = "none";
+    storageDir = null;
+    storageReadOnly = false;
+    lockSince = null;
+    state = null;
+    savedHandleName = (await savedDirHandle())?.name || null;
+    render();
+  });
+  // Afmelden geeft de grendel vrij, zodat een collega er meteen in kan.
+  el.querySelector("#sign-off").addEventListener("click", async (e) => {
+    e.currentTarget.disabled = true;
+    await releaseLock().catch(() => {});
+    state.currentUserId = null;
+    try {
+      sessionStorage.removeItem(USER_KEY);
+    } catch (err) {
+      /* niet belangrijk */
+    }
+    setSaveStatus("idle");
+    render();
+  });
   el.querySelector("#switch-user").addEventListener("click", () => {
     state.currentUserId = null;
+    try {
+      sessionStorage.removeItem(USER_KEY);
+    } catch (e) {
+      /* niet belangrijk */
+    }
     saveState();
     render();
   });
@@ -1438,5 +1884,4 @@ function exportCsv() {
   URL.revokeObjectURL(url);
 }
 
-loadPanelPrefs();
-render();
+boot();

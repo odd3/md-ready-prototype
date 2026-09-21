@@ -399,6 +399,35 @@ td.cell { text-align: center; vertical-align: middle; }
 .cu-name { display: block; font-size: 13px; font-weight: 600; }
 .cu-role { display: block; font-size: 11px; color: var(--ink-muted); }
 
+/* ---- Opslag: keuzescherm, grendel, opslagstatus ---- */
+.storage-choices { display: flex; flex-direction: column; gap: 10px; margin: 20px 0 14px; }
+.storage-choices .btn { width: 100%; padding: 12px; font-size: 14px; }
+.picker-footnote { color: var(--ink-muted); font-size: 12px; margin: 0; line-height: 1.5; }
+.storage-warning {
+  background: var(--amber-soft); color: var(--amber); border-radius: var(--radius);
+  padding: 10px 12px; font-size: 12.5px; line-height: 1.5; margin-bottom: 4px;
+}
+.storage-warning.inline { margin-bottom: 18px; }
+.storage-warning.strong { background: var(--danger); color: #fff; font-weight: 600; }
+
+.storage-badge {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line);
+  font-size: 11px; color: var(--ink-muted);
+}
+.sb-where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Opslagstatus is nooit alleen kleur: er staat altijd een teken en een woord
+   bij, voor een uitgebleekt scherm en voor wie kleuren niet onderscheidt. */
+.save-indicator { font-family: var(--font-mono); font-size: 10.5px; }
+.save-indicator.saved { color: var(--accent); }
+.save-indicator.saving { color: var(--ink-muted); }
+.save-indicator.error { color: var(--danger); font-weight: 700; }
+.linklike {
+  background: none; border: none; padding: 0; text-align: left;
+  color: var(--ink-muted); font-size: 11px; text-decoration: underline; cursor: pointer; font-family: inherit;
+}
+.linklike:hover { color: var(--accent); }
+
 /* ---- SGB V onder de naam in de patiëntenlijst ---- */
 .sgbv-tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
 .sgbv-tag {

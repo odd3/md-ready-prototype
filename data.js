@@ -5,16 +5,24 @@
 // bezoekers na een update niet handmatig "Demo zurücksetzen" hoeven te klikken.
 const SEED_VERSION = 10;
 
+// Een datum is hier altijd de kalenderdatum van de gebruiker, niet die van
+// UTC. toISOString() rekent om naar UTC en levert ten oosten van Greenwich
+// steevast de dag ervoor op: middernacht in Duitsland is 22:00 UTC van de
+// vorige dag. Elke Frist en elke afvinkdatum stond daardoor een dag te vroeg.
+function isoDate(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 function daysFromNow(n) {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return isoDate(d);
 }
 function addMonths(dateStr, months) {
   const d = new Date(dateStr + "T00:00:00");
   d.setMonth(d.getMonth() + months);
-  return d.toISOString().slice(0, 10);
+  return isoDate(d);
 }
 
 // ---------------------------------------------------------------------------
