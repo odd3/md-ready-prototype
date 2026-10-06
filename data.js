@@ -3,7 +3,7 @@
 // Ophogen bij elke wijziging aan de seed-data: bij een mismatch met de
 // opgeslagen localStorage-versie wordt automatisch opnieuw geseed, zodat
 // bezoekers na een update niet handmatig "Demo zurücksetzen" hoeven te klikken.
-const SEED_VERSION = 10;
+const SEED_VERSION = 11;
 
 // Een datum is hier altijd de kalenderdatum van de gebruiker, niet die van
 // UTC. toISOString() rekent om naar UTC en levert ten oosten van Greenwich
@@ -26,16 +26,28 @@ function addMonths(dateStr, months) {
 }
 
 // ---------------------------------------------------------------------------
-// INSTALLATIE-INSTELLINGEN — dit is het enige blok dat per Pflegedienst wijzigt.
-// De applicatie draait vanaf een netwerkshare: bij het opstarten moet de
-// Pflegedienst al goed staan, de medewerker kiest alleen nog wie hij is.
-// Pas hieronder de naam en de datum van de laatste MD-controle aan.
+// ORGANISATIES — de Pflegediensten die met deze installatie worden begeleid.
+// Elke patiënt, elk personeelsdossier en elk checklistpunt hoort bij precies
+// één organisatie; wisselen van organisatie wisselt dus de hele administratie.
 // ---------------------------------------------------------------------------
-const PFLEGEDIENST = {
-  name: "MD-READY Demo Pflegedienst",
-  createdAt: daysFromNow(-210), // in productie een vaste datum: "2025-11-14"
-  auditIntervalMonths: 9,
-};
+
+// Elke organisatie krijgt een eigen kleur in de balk bovenaan. Kleur is nooit
+// het enige signaal — de naam staat er groot naast — maar bij het snelle
+// wisselen tussen diensten zie je aan de kleur meteen dat je ergens anders zit.
+// Alle kleuren zijn donker genoeg voor witte tekst, in licht én donker thema.
+const ORG_COLORS = [
+  { id: "teal", label: "Türkis", bg: "#0f766e" },
+  { id: "blue", label: "Blau", bg: "#1d4ed8" },
+  { id: "purple", label: "Violett", bg: "#6d28d9" },
+  { id: "amber", label: "Bernstein", bg: "#b45309" },
+  { id: "rose", label: "Rosé", bg: "#be123c" },
+  { id: "green", label: "Grün", bg: "#15803d" },
+  { id: "slate", label: "Schiefer", bg: "#334155" },
+  { id: "cyan", label: "Petrol", bg: "#155e75" },
+];
+function orgColor(id) {
+  return ORG_COLORS.find((c) => c.id === id) || ORG_COLORS[0];
+}
 
 // SGB V — behandelingspflege per patiënt. Wat hier aanstaat, staat in de
 // namenlijst direct onder de naam, zodat bij de MD-controle in één oogopslag
@@ -137,9 +149,10 @@ const STAFF_CATEGORIES = [
   { id: "azubi", label: "Auszubildende" },
 ];
 
-function blankChecklistItem(id, category, label, linkType, linkId, assigneeId) {
+function blankChecklistItem(id, category, label, linkType, linkId, assigneeId, orgId) {
   return {
     id,
+    orgId,
     category,
     label,
     level: 1, // handmatig toegevoegde punten staan op hoofdstukniveau
@@ -165,66 +178,121 @@ function blankChecklistItem(id, category, label, linkType, linkId, assigneeId) {
   };
 }
 
+function freshId(prefix) {
+  return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
 // Standaard Patientenakte- + Verwaltungspunten voor een nieuw aangemaakte patiënt.
-function createPatientChecklistItems(patientId, assigneeId) {
+function createPatientChecklistItems(patientId, assigneeId, orgId) {
   const items = [];
   ["akte", "verwaltung"].forEach((cat) => {
     ITEM_DEFS[cat].forEach((def) => {
       const { label } = itemDefEntry(def);
-      items.push(blankChecklistItem("np" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), cat, label, "patient", patientId, assigneeId));
+      items.push(blankChecklistItem(freshId("np"), cat, label, "patient", patientId, assigneeId, orgId));
     });
   });
   return items;
 }
 // Standaard Personal-checklistpunten voor een nieuw personeelslid.
-function createStaffChecklistItems(staffId, assigneeId) {
-  return ITEM_DEFS.personal.map((def) => blankChecklistItem("ns" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), "personal", itemDefEntry(def).label, "staff", staffId, assigneeId));
+function createStaffChecklistItems(staffId, assigneeId, orgId) {
+  return ITEM_DEFS.personal.map((def) => blankChecklistItem(freshId("ns"), "personal", itemDefEntry(def).label, "staff", staffId, assigneeId, orgId));
+}
+// Een nieuwe organisatie begint met het volledige QM-handboek en Hygienehandbuch.
+// Patiënten en personeel voegt men zelf toe, maar deze twee lijsten zijn voor
+// iedere Pflegedienst gelijk en moeten er vanaf dag één staan.
+function createOrgChecklistItems(orgId) {
+  const items = [];
+  ["qm", "hygiene"].forEach((cat) => {
+    ITEM_DEFS[cat].forEach((def) => {
+      const { label, level } = itemDefEntry(def);
+      const item = blankChecklistItem(freshId("no"), cat, label, "org", null, null, orgId);
+      item.level = level;
+      items.push(item);
+    });
+  });
+  return items;
 }
 
 function seedState() {
+  // Iedereen is admin en mag alles wijzigen; er is geen wachtwoord. Wie je bent
+  // bepaalt dus niet wát je mag, alleen onder welke naam het wordt vastgelegd.
   const users = [
-    { id: "nasrat", name: "Nasrat", role: "admin", roleLabel: "Pflegedienst Admin", initials: "NA" },
-    { id: "michael", name: "Michael", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "MI" },
-    { id: "sabine", name: "Sabine", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "SA" },
-    { id: "jonas", name: "Jonas", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "JO" },
-    { id: "fatima", name: "Fatima", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "FA" },
-    { id: "klara", name: "Klara", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "KL" },
-    { id: "deniz", name: "Deniz", role: "mitarbeiter", roleLabel: "Mitarbeiter", initials: "DE" },
+    { id: "nasrat", name: "Nasrat", role: "admin", roleLabel: "Administrator", initials: "NA" },
+    { id: "michael", name: "Michael", role: "admin", roleLabel: "Administrator", initials: "MI" },
+    { id: "sabine", name: "Sabine", role: "admin", roleLabel: "Administrator", initials: "SA" },
+    { id: "jonas", name: "Jonas", role: "admin", roleLabel: "Administrator", initials: "JO" },
+    { id: "fatima", name: "Fatima", role: "admin", roleLabel: "Administrator", initials: "FA" },
+    { id: "klara", name: "Klara", role: "admin", roleLabel: "Administrator", initials: "KL" },
+    { id: "deniz", name: "Deniz", role: "admin", roleLabel: "Administrator", initials: "DE" },
+  ];
+
+  const organizations = [
+    { id: "org1", name: "MD-READY Demo Pflegedienst", color: "teal", active: true, createdAt: daysFromNow(-210), auditIntervalMonths: 9 },
+    { id: "org2", name: "Pflegedienst Sonnenschein", color: "amber", active: true, createdAt: daysFromNow(-40), auditIntervalMonths: 9 },
+    { id: "org3", name: "Pflegedienst Lindenhof", color: "purple", active: true, createdAt: daysFromNow(-260), auditIntervalMonths: 6 },
   ];
 
   const patients = [
-    { id: "p1", name: "Anna Berger", active: true, pflegegrad: "PG 3", sgbV: ["medigabe", "bz_messung", "insulingabe"] },
-    { id: "p2", name: "Thomas Vogel", active: true, pflegegrad: "PG 2", sgbV: ["medigabe"] },
-    { id: "p3", name: "Ingrid Schuster", active: true, pflegegrad: "PG 4", sgbV: ["kompressionsstruempfe", "wunde_chronisch"] },
-    { id: "p4", name: "Klaus Weidner", active: true, pflegegrad: "PG 1", sgbV: [] },
-    { id: "p5", name: "Helga Brandt", active: true, pflegegrad: "PG 2", sgbV: ["augentropfen", "medigabe"] },
-    { id: "p6", name: "Werner Fuchs", active: true, pflegegrad: "PG 3", sgbV: ["bz_messung", "insulingabe", "wunde_akut"] },
-    { id: "p7", name: "Renate König", active: true, pflegegrad: "PG 5", sgbV: ["medigabe", "kompressionsverbaende", "wunde_chronisch"] },
-    { id: "p8", name: "Dieter Lang", active: true, pflegegrad: "PG 1", sgbV: [] },
-    { id: "p9", name: "Ursula Hartmann", active: true, pflegegrad: "PG 4", sgbV: ["kompressionsstruempfe"] },
-    { id: "p10", name: "Peter Wolff", active: true, pflegegrad: "PG 2", sgbV: ["medigabe", "augentropfen"] },
-    { id: "p11", name: "Brigitte Krause", active: true, pflegegrad: "PG 3", sgbV: ["bz_messung"] },
-    { id: "p12", name: "Manfred Zimmermann", active: false, pflegegrad: "PG 4", sgbV: ["wunde_chronisch"] },
-    { id: "p13", name: "Elke Neumann", active: true, pflegegrad: "PG 1", sgbV: [] },
-    { id: "p14", name: "Rolf Baumann", active: true, pflegegrad: "PG 3", sgbV: ["medigabe", "kompressionsstruempfe", "bz_messung"] },
+    { orgId: "org1", id: "p1", name: "Anna Berger", active: true, pflegegrad: "PG 3", sgbV: ["medigabe", "bz_messung", "insulingabe"] },
+    { orgId: "org1", id: "p2", name: "Thomas Vogel", active: true, pflegegrad: "PG 2", sgbV: ["medigabe"] },
+    { orgId: "org1", id: "p3", name: "Ingrid Schuster", active: true, pflegegrad: "PG 4", sgbV: ["kompressionsstruempfe", "wunde_chronisch"] },
+    { orgId: "org1", id: "p4", name: "Klaus Weidner", active: true, pflegegrad: "PG 1", sgbV: [] },
+    { orgId: "org1", id: "p5", name: "Helga Brandt", active: true, pflegegrad: "PG 2", sgbV: ["augentropfen", "medigabe"] },
+    { orgId: "org1", id: "p6", name: "Werner Fuchs", active: true, pflegegrad: "PG 3", sgbV: ["bz_messung", "insulingabe", "wunde_akut"] },
+    { orgId: "org1", id: "p7", name: "Renate König", active: true, pflegegrad: "PG 5", sgbV: ["medigabe", "kompressionsverbaende", "wunde_chronisch"] },
+    { orgId: "org1", id: "p8", name: "Dieter Lang", active: true, pflegegrad: "PG 1", sgbV: [] },
+    { orgId: "org1", id: "p9", name: "Ursula Hartmann", active: true, pflegegrad: "PG 4", sgbV: ["kompressionsstruempfe"] },
+    { orgId: "org1", id: "p10", name: "Peter Wolff", active: true, pflegegrad: "PG 2", sgbV: ["medigabe", "augentropfen"] },
+    { orgId: "org1", id: "p11", name: "Brigitte Krause", active: true, pflegegrad: "PG 3", sgbV: ["bz_messung"] },
+    { orgId: "org1", id: "p12", name: "Manfred Zimmermann", active: false, pflegegrad: "PG 4", sgbV: ["wunde_chronisch"] },
+    { orgId: "org1", id: "p13", name: "Elke Neumann", active: true, pflegegrad: "PG 1", sgbV: [] },
+    { orgId: "org1", id: "p14", name: "Rolf Baumann", active: true, pflegegrad: "PG 3", sgbV: ["medigabe", "kompressionsstruempfe", "bz_messung"] },
+
+    { orgId: "org2", id: "p21", name: "Gerda Hoffmann", active: true, pflegegrad: "PG 2", sgbV: ["medigabe", "augentropfen"] },
+    { orgId: "org2", id: "p22", name: "Josef Winkler", active: true, pflegegrad: "PG 4", sgbV: ["bz_messung", "insulingabe"] },
+    { orgId: "org2", id: "p23", name: "Marianne Seidel", active: true, pflegegrad: "PG 3", sgbV: ["kompressionsstruempfe"] },
+    { orgId: "org2", id: "p24", name: "Alfred Stein", active: true, pflegegrad: "PG 1", sgbV: [] },
+
+    { orgId: "org3", id: "p31", name: "Hildegard Pohl", active: true, pflegegrad: "PG 5", sgbV: ["wunde_chronisch", "medigabe"] },
+    { orgId: "org3", id: "p32", name: "Bernd Kaiser", active: true, pflegegrad: "PG 2", sgbV: ["kompressionsverbaende"] },
   ];
 
   // Personal: aparte entiteit los van de inlog-gebruikers (users) — dit zijn
   // de daadwerkelijke personeelsleden waarvoor een personeelsdossier
   // (Vertrag/Zertifikat/etc.) wordt bijgehouden, per kwalificatiecategorie.
   const staffNames = {
-    examinierte: ["Petra Lindner", "Otto Krämer"],
-    lg1: ["Nadine Schröder", "Bilal Yildiz"],
-    lg2: ["Carmen Sailer", "Heinz Bergmann"],
-    hauswirtschaft: ["Rosa Delgado", "Ingo Thiel"],
-    verwaltung: ["Meike Vogt", "Kai Ostermann"],
-    azubi: ["Lina Sommer", "Noah Peters"],
+    org1: {
+      examinierte: ["Petra Lindner", "Otto Krämer"],
+      lg1: ["Nadine Schröder", "Bilal Yildiz"],
+      lg2: ["Carmen Sailer", "Heinz Bergmann"],
+      hauswirtschaft: ["Rosa Delgado", "Ingo Thiel"],
+      verwaltung: ["Meike Vogt", "Kai Ostermann"],
+      azubi: ["Lina Sommer", "Noah Peters"],
+    },
+    org2: {
+      examinierte: ["Silke Brandner"],
+      lg1: ["Tomasz Nowak"],
+      lg2: [],
+      hauswirtschaft: ["Aylin Demir"],
+      verwaltung: [],
+      azubi: [],
+    },
+    org3: {
+      examinierte: ["Markus Reiter"],
+      lg1: [],
+      lg2: ["Dorothea Falk"],
+      hauswirtschaft: [],
+      verwaltung: [],
+      azubi: [],
+    },
   };
   const staff = [];
   let staffIdCounter = 1;
-  STAFF_CATEGORIES.forEach((cat) => {
-    staffNames[cat.id].forEach((name) => {
-      staff.push({ id: "s" + staffIdCounter++, name, category: cat.id, active: true });
+  organizations.forEach((org) => {
+    STAFF_CATEGORIES.forEach((cat) => {
+      (staffNames[org.id][cat.id] || []).forEach((name) => {
+        staff.push({ orgId: org.id, id: "s" + staffIdCounter++, name, category: cat.id, active: true });
+      });
     });
   });
 
@@ -261,7 +329,7 @@ function seedState() {
     p14: { statuses: ["open", "done", "open", "in_progress", "done", "done"], offsets: [-2, -5, -7, 4, -3, 9] }, // Dringend
   };
 
-  function pushItems(categoryId, linkType, linkId, profile, assigneeOffset) {
+  function pushItems(orgId, categoryId, linkType, linkId, profile, assigneeOffset) {
     itemDefs[categoryId].forEach((def, idx) => {
       const { label, level } = itemDefEntry(def);
       const status = profile ? profile.statuses[idx % profile.statuses.length] : (idx % 3 === 0 ? "open" : idx % 3 === 1 ? "in_progress" : "done");
@@ -270,6 +338,7 @@ function seedState() {
       const assignedTo = assignPool[(idx + assigneeOffset) % assignPool.length];
       items.push({
         id: "i" + itemId++,
+        orgId,
         category: categoryId,
         label,
         level,
@@ -297,16 +366,20 @@ function seedState() {
 
   patients.forEach((p, i) => {
     const profile = patientProfiles[p.id];
-    pushItems("akte", "patient", p.id, profile, i);
-    pushItems("verwaltung", "patient", p.id, profile, i + 1);
+    pushItems(p.orgId, "akte", "patient", p.id, profile, i);
+    pushItems(p.orgId, "verwaltung", "patient", p.id, profile, i + 1);
   });
 
   staff.forEach((s, i) => {
-    pushItems("personal", "staff", s.id, null, i);
+    pushItems(s.orgId, "personal", "staff", s.id, null, i);
   });
 
-  pushItems("qm", "org", null, null, 0);
-  pushItems("hygiene", "org", null, null, 1);
+  // QM en Hygiene zijn per organisatie: elke Pflegedienst werkt zijn eigen
+  // handboek af en wordt daar ook apart op gecontroleerd.
+  organizations.forEach((org, i) => {
+    pushItems(org.id, "qm", "org", null, null, i);
+    pushItems(org.id, "hygiene", "org", null, null, i + 1);
+  });
 
   // A few illustrative comments
   const sisItem = items.find((it) => it.category === "akte" && it.label === "SIS" && it.linkId === "p1");
@@ -321,15 +394,11 @@ function seedState() {
     koenigItem.comments.push({ id: "c3", author: "nasrat", text: "Frist bereits überschritten, bitte heute noch erledigen.", createdAt: daysFromNow(-1) });
   }
 
-  // Eén Pflegedienst per installatie (zie PFLEGEDIENST bovenaan dit bestand).
-  // De lijst met andere diensten is eruit: elke installatie op een netwerkshare
-  // is er één van één, en een overzicht van andermans controles hoort daar niet.
-
   return {
     version: SEED_VERSION,
-    tenant: { name: PFLEGEDIENST.name },
-    pflegedienst: { ...PFLEGEDIENST },
     currentUserId: null,
+    currentOrgId: null,
+    organizations,
     users,
     patients,
     staff,

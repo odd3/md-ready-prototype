@@ -2,7 +2,19 @@
 
 Klikbaar front-end prototype van de checklist- en auditvoorbereidingsapplicatie voor Pflegedienste, gebaseerd op de functionele specificatie.
 
-**Belangrijk:** dit is een demo zonder echt backend. Alle data is fictief. Er is geen echte authenticatie — je kiest bij het opstarten alleen wie je bent, zodat je handelingen op naam komen te staan; dat is naamsvermelding, geen toegangsbeveiliging. Voer hier geen echte patiënt- of medewerkersgegevens in, zeker niet als deze repository (ook tijdelijk) publiek op GitHub staat.
+**Belangrijk:** dit is een demo zonder echt backend. Alle data is fictief. Er is geen authenticatie en geen wachtwoord — je kiest bij het opstarten wie je bent, zodat je handelingen op naam komen te staan. Dat is naamsvermelding, geen toegangsbeveiliging. Iedereen is administrator en mag alles wijzigen. Voer hier geen echte patiënt- of medewerkersgegevens in, zeker niet als deze repository (ook tijdelijk) publiek op GitHub staat.
+
+## Organisaties
+
+De applicatie bedient meerdere Pflegediensten tegelijk. Elke organisatie heeft **eigen patiënten, eigen personeel en eigen checklisten** — wisselen van organisatie wisselt de hele administratie.
+
+Opstarten gaat in twee stappen: eerst **wie ben je**, dan **welke Pflegedienst**. Daarna wissel je bovenin via de keuzelijst in de balk.
+
+Elke organisatie heeft een **eigen kleur in die balk**, met de naam er groot naast. De kleur is het snelle signaal na een wissel, de naam het harde: kleur is nooit het enige onderscheid, want niet iedereen ziet kleuren even goed en een scherm in fel licht verwaast ze. Bij het aanmaken wordt automatisch een kleur voorgesteld die nog niet in gebruik is.
+
+Een nieuwe organisatie aanmaken kan vanaf het keuzescherm, vanuit de balk (`+ Neue Organisation …`) of via **Beheer**. Zij begint met het volledige QM-handboek en Hygienehandbuch, want die zijn voor elke Pflegedienst gelijk. Patiënten en personeel voeg je zelf toe.
+
+Organisaties worden nooit verwijderd, alleen op inactief gezet — de historie moet navolgbaar blijven.
 
 ## Waar de gegevens staan
 
@@ -34,8 +46,7 @@ In beide gevallen blijft de naam waaronder je werkt op de werkplek staan en gaat
 
 ## Demo-accounts
 
-- **Nasrat** — Pflegedienst Admin (ziet alles: Checkliste incl. Personal, Patiënten, Beheer, CSV-export)
-- **Michael** — Mitarbeiter (ziet Dashboard en Checkliste zonder de Personal-categorie, geen Beheer/export)
+Zeven namen — Nasrat, Michael, Sabine, Jonas, Fatima, Klara en Deniz — allemaal administrator, allemaal zonder wachtwoord. De rolvelden staan nog in het datamodel, zodat een scheiding tussen rollen later terug kan zonder verbouwing.
 
 ## Lokaal bekijken
 
@@ -46,6 +57,12 @@ python3 -m http.server 8080
 ```
 
 Ga daarna naar `http://localhost:8080`.
+
+## Hosten op Vercel
+
+Er is geen build-stap en geen configuratiebestand nodig: importeer de repository in Vercel, laat het framework op *Other* staan en de map op de repo-root. Vercel serveert `index.html` en de rest als statische bestanden.
+
+**Let op wat dat wel en niet oplost.** Vercel serveert de applicatie, maar het is geen opslag — er is daar geen schijf waar iets blijft staan. Elke bezoeker houdt dus zijn eigen administratie in zijn eigen browser, tenzij hij de netwerkmap-modus gebruikt, en dan deelt hij alleen met mensen op datzelfde netwerk. Voor meerdere mensen die écht in dezelfde gegevens werken is een database nodig; zie "Waar de gegevens staan" hierboven en de aantekening onderaan.
 
 ## Hosten op GitHub Pages
 

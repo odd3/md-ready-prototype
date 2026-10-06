@@ -6,6 +6,8 @@ const MODE_KEY = "mdready-storage-mode";
 // Wie je bent hoort bij deze werkplek, niet bij het gedeelde bestand: anders
 // erft de volgende die het opent de naam van de vorige.
 const USER_KEY = "mdready-current-user";
+// Idem voor de gekozen organisatie: een werkplekkeuze, niet iets van de administratie.
+const ORG_KEY = "mdready-current-org";
 let state = null;
 let route = "dashboard";
 const EMPTY_FILTERS = { quick: [], patient: "", category: "", assignee: "", status: "" };
@@ -22,7 +24,7 @@ const KPI_FILTERS = {
 };
 let openItemId = null;
 let staffTab = "examinierte";
-// { kind: "patient-new"|"patient-edit"|"staff-new"|"staff-edit"|"item-new"|"pdf-export", id?, category?, categoryIds?, scope?, scopeValue? }
+// { kind: "patient-new"|"patient-edit"|"staff-new"|"staff-edit"|"item-new"|"org-new"|"org-edit"|"pdf-export", id?, category?, categoryIds?, scope?, scopeValue? }
 let modalState = null;
 
 /* ---------------- Opslag: netwerkmap of deze browser ---------------- */
@@ -65,7 +67,7 @@ function loadLocalState() {
 // Wat er naar het gedeelde bestand gaat. De ingelogde naam blijft eruit; die
 // hoort bij de werkplek en niet bij de administratie.
 function stateForFile() {
-  return { ...state, currentUserId: null };
+  return { ...state, currentUserId: null, currentOrgId: null };
 }
 
 function saveState() {
@@ -168,7 +170,20 @@ async function loadFromFile() {
     state = seedState();
     if (!storageReadOnly) await writeDataFile(storageDir, stateForFile());
   }
-  state.currentUserId = sessionStorage.getItem(USER_KEY) || null;
+  restoreSessionChoices();
+}
+
+// Wie je bent en waar je werkt staan in sessionStorage, niet in het gedeelde
+// bestand. Een organisatie die intussen is verwijderd valt vanzelf weg.
+function restoreSessionChoices() {
+  try {
+    state.currentUserId = sessionStorage.getItem(USER_KEY) || null;
+    const orgId = sessionStorage.getItem(ORG_KEY);
+    state.currentOrgId = orgId && state.organizations.some((o) => o.id === orgId && o.active !== false) ? orgId : null;
+  } catch (e) {
+    state.currentUserId = null;
+    state.currentOrgId = null;
+  }
 }
 
 async function takeLock() {
@@ -256,7 +271,7 @@ function useLocalStorageMode() {
   storageReadOnly = false;
   localStorage.setItem(MODE_KEY, "local");
   state = loadLocalState();
-  state.currentUserId = sessionStorage.getItem(USER_KEY) || null;
+  restoreSessionChoices();
 }
 
 async function boot() {
@@ -301,6 +316,21 @@ function resetDemo() {
 
 function currentUser() {
   return state && state.users.find((u) => u.id === state.currentUserId);
+}
+function currentOrg() {
+  return state && state.organizations.find((o) => o.id === state.currentOrgId);
+}
+function activeOrgs() {
+  return state.organizations.filter((o) => o.active !== false);
+}
+function orgPatients() {
+  return state.patients.filter((p) => p.orgId === state.currentOrgId);
+}
+function orgStaff() {
+  return state.staff.filter((x) => x.orgId === state.currentOrgId);
+}
+function orgItems() {
+  return state.items.filter((i) => i.orgId === state.currentOrgId);
 }
 function isAdmin() {
   const u = currentUser();
@@ -350,18 +380,18 @@ function visibleCategories() {
 }
 function visibleItems() {
   const catIds = visibleCategories().map((c) => c.id);
-  return state.items.filter((it) => catIds.includes(it.category));
+  return orgItems().filter((it) => catIds.includes(it.category));
 }
 function patientCategories() {
   return state.categories.filter((c) => c.scope === "patient");
 }
 function patientScopedItems() {
-  return state.items.filter((it) => it.linkType === "patient");
+  return orgItems().filter((it) => it.linkType === "patient");
 }
 function itemLabelsForCategory(categoryId) {
-  const refPatient = state.patients[0];
+  const refPatient = orgPatients()[0];
   if (!refPatient) return [];
-  return state.items.filter((it) => it.linkType === "patient" && it.linkId === refPatient.id && it.category === categoryId).map((it) => it.label);
+  return orgItems().filter((it) => it.linkType === "patient" && it.linkId === refPatient.id && it.category === categoryId).map((it) => it.label);
 }
 function itemLinkLabel(item) {
   if (item.linkType === "patient") {
@@ -375,7 +405,7 @@ function isFullyDone(item) {
   return item.status === "done" && (!item.nachkontrolleRequired || item.nachkontrolleDone);
 }
 function computeAggregateStatus(linkType, linkId) {
-  const items = state.items.filter((it) => it.linkType === linkType && it.linkId === linkId);
+  const items = orgItems().filter((it) => it.linkType === linkType && it.linkId === linkId);
   if (items.length === 0) return "korrektur";
   if (items.every((it) => isFullyDone(it))) return "vollstaendig";
   const today = todayStr();
@@ -420,10 +450,18 @@ function render() {
     return;
   }
 
+  // Daarna: voor welke Pflegedienst werk je. Alles wat volgt — patiënten,
+  // personeel, checklisten — hoort bij precies die organisatie.
+  if (!currentOrg()) {
+    app.appendChild(renderOrgPicker());
+    return;
+  }
+
   app.appendChild(renderSidebar());
 
   const main = document.createElement("div");
   main.className = "main";
+  main.appendChild(renderOrgBar());
   if (storageReadOnly || storageNote || storageError) {
     const banner = document.createElement("div");
     banner.className = "storage-warning inline" + (storageReadOnly ? " strong" : "");
@@ -574,6 +612,117 @@ function renderLockConflict() {
   return el;
 }
 
+/* ---------------- Organisaties ---------------- */
+
+// Een vlak in de kleur van de organisatie. Hetzelfde blokje op het keuzescherm
+// en in de balk bovenaan, zodat je de kleur leert herkennen.
+function orgSwatchHtml(org, extraClass) {
+  const c = orgColor(org.color);
+  return `<span class="org-swatch ${extraClass || ""}" style="background:${c.bg}">${org.name.slice(0, 1).toUpperCase()}</span>`;
+}
+
+function renderOrgPicker() {
+  const el = document.createElement("div");
+  el.className = "user-picker";
+  const orgs = activeOrgs();
+  el.innerHTML = `
+    <div class="picker-card">
+      <div class="picker-brand">
+        <div class="brand-mark">M</div>
+        <div>
+          <div class="brand-name">MD-READY</div>
+          <div class="tenant-name">Angemeldet als ${currentUser().name}</div>
+        </div>
+      </div>
+      <h1>Welcher Pflegedienst?</h1>
+      <p class="picker-sub">Jede Organisation hat ihre eigenen Patienten, Mitarbeiter und Checklisten. Wechseln können Sie jederzeit oben im Balken.</p>
+      <div class="picker-grid">
+        ${orgs
+          .map(
+            (o) => `<button class="picker-btn org-btn" data-org="${o.id}">
+              ${orgSwatchHtml(o)}
+              <span class="picker-name">${o.name}</span>
+              <span class="picker-role">${orgStats(o.id)}</span>
+            </button>`
+          )
+          .join("") || '<p class="picker-sub">Noch keine Organisation angelegt.</p>'}
+      </div>
+      <div class="storage-choices">
+        <button class="btn" id="org-new">+ Neue Organisation anlegen</button>
+      </div>
+    </div>
+  `;
+  el.querySelectorAll("[data-org]").forEach((b) =>
+    b.addEventListener("click", () => switchOrg(b.dataset.org))
+  );
+  el.querySelector("#org-new").addEventListener("click", () => {
+    modalState = { kind: "org-new" };
+    render();
+  });
+  return el;
+}
+
+function orgStats(orgId) {
+  const pats = state.patients.filter((p) => p.orgId === orgId).length;
+  const items = state.items.filter((i) => i.orgId === orgId);
+  const open = items.filter((i) => !isFullyDone(i)).length;
+  return `${pats} Patienten · ${open} offene Punkte`;
+}
+
+// Van organisatie wisselen zet ook de filters en het geopende punt terug —
+// die wijzen naar gegevens van de vorige organisatie en zouden leeg of, erger,
+// verwarrend blijven staan.
+function switchOrg(orgId) {
+  state.currentOrgId = orgId;
+  activeFilters = { ...EMPTY_FILTERS };
+  openItemId = null;
+  modalState = null;
+  staffTab = STAFF_CATEGORIES[0].id;
+  route = "dashboard";
+  try {
+    sessionStorage.setItem(ORG_KEY, orgId);
+  } catch (e) {
+    /* onthouden is meegenomen, niet noodzakelijk */
+  }
+  render();
+}
+
+// De balk bovenaan: grote naam en een eigen kleur per organisatie, zodat na een
+// wissel meteen zichtbaar is in wiens administratie je zit. Kleur alleen zou
+// niet genoeg zijn — vandaar de naam in groot, en het kiesmenu ernaast.
+function renderOrgBar() {
+  const org = currentOrg();
+  const c = orgColor(org.color);
+  const info = pflegedienstInfo(org);
+  const late = info.daysLeft < 0;
+  const bar = document.createElement("div");
+  bar.className = "org-bar";
+  bar.style.background = c.bg;
+  bar.innerHTML = `
+    <div class="org-bar-main">
+      <div class="org-bar-label">Pflegedienst</div>
+      <h2 class="org-bar-name">${org.name}</h2>
+    </div>
+    <div class="org-bar-side">
+      <span class="org-bar-audit ${late ? "late" : ""}">${late ? "MD-Kontrolle überfällig" : info.daysLeft + " Tage bis zur MD-Kontrolle"}</span>
+      <select class="org-switch" id="org-switch" title="Organisation wechseln">
+        ${activeOrgs().map((o) => `<option value="${o.id}" ${o.id === org.id ? "selected" : ""}>${o.name}</option>`).join("")}
+        <option value="__new">+ Neue Organisation …</option>
+      </select>
+    </div>
+  `;
+  bar.querySelector("#org-switch").addEventListener("change", (e) => {
+    if (e.target.value === "__new") {
+      e.target.value = org.id;
+      modalState = { kind: "org-new" };
+      render();
+      return;
+    }
+    switchOrg(e.target.value);
+  });
+  return bar;
+}
+
 // Aanmeldscherm — geen wachtwoord, geen echte authenticatie. Dit kiest alleen
 // namens wie er gewerkt wordt; de beveiliging komt in de architectuurfase.
 function renderUserPicker() {
@@ -585,7 +734,7 @@ function renderUserPicker() {
         <div class="brand-mark">M</div>
         <div>
           <div class="brand-name">MD-READY</div>
-          <div class="tenant-name">${state.tenant.name}</div>
+          <div class="tenant-name">Checklisten & Auditvorbereitung</div>
         </div>
       </div>
       <h1>Wer arbeitet heute?</h1>
@@ -643,7 +792,7 @@ function renderSidebar() {
       <div class="brand-mark">M</div>
       <div>
         <div class="brand-name">MD-READY</div>
-        <div class="tenant-name">${state.tenant.name}</div>
+        <div class="tenant-name">Checklisten & Auditvorbereitung</div>
       </div>
     </div>
     <nav class="primary">
@@ -694,8 +843,10 @@ function renderSidebar() {
     e.currentTarget.disabled = true;
     await releaseLock().catch(() => {});
     state.currentUserId = null;
+    state.currentOrgId = null;
     try {
       sessionStorage.removeItem(USER_KEY);
+      sessionStorage.removeItem(ORG_KEY);
     } catch (err) {
       /* niet belangrijk */
     }
@@ -775,7 +926,7 @@ function renderDashboard() {
     <div class="pd-list">
       ${(() => {
         // Alleen de eigen Pflegedienst: deze installatie is er één van één.
-        const pd = state.pflegedienst;
+        const pd = currentOrg();
         const info = pflegedienstInfo(pd);
         const late = info.daysLeft < 0;
         return `<div class="pd-card">
@@ -823,7 +974,7 @@ function renderChecklist() {
   const shownItems = filteredChecklistItems();
   const header = document.createElement("div");
   header.className = "page-header";
-  const patient = activeFilters.patient ? state.patients.find((x) => x.id === activeFilters.patient) : null;
+  const patient = activeFilters.patient ? orgPatients().find((x) => x.id === activeFilters.patient) : null;
   header.innerHTML = `
     <div>
       ${
@@ -886,7 +1037,7 @@ function renderChecklist() {
   filterBar.innerHTML = `
     ${quickFilters.map((f) => `<button class="chip ${activeFilters.quick.includes(f.id) ? "active" : ""}" data-quick="${f.id}">${f.label}</button>`).join("")}
     <select class="select-filter" id="f-category"><option value="">Alle Kategorien</option>${visibleCategories().map((c) => `<option value="${c.id}" ${activeFilters.category === c.id ? "selected" : ""}>${c.label}</option>`).join("")}</select>
-    <select class="select-filter" id="f-patient"><option value="">Alle Patienten</option>${state.patients.map((p) => `<option value="${p.id}" ${activeFilters.patient === p.id ? "selected" : ""}>${p.name}</option>`).join("")}</select>
+    <select class="select-filter" id="f-patient"><option value="">Alle Patienten</option>${orgPatients().map((p) => `<option value="${p.id}" ${activeFilters.patient === p.id ? "selected" : ""}>${p.name}</option>`).join("")}</select>
     <select class="select-filter" id="f-assignee"><option value="">Alle Verantwortlichen</option>${state.users.map((u) => `<option value="${u.id}" ${activeFilters.assignee === u.id ? "selected" : ""}>${u.name}</option>`).join("")}</select>
     <select class="select-filter" id="f-status"><option value="">Alle Status</option><option value="open" ${activeFilters.status === "open" ? "selected" : ""}>Offen</option><option value="in_progress" ${activeFilters.status === "in_progress" ? "selected" : ""}>In Bearbeitung</option><option value="done" ${activeFilters.status === "done" ? "selected" : ""}>Abgeschlossen</option></select>
   `;
@@ -1001,7 +1152,7 @@ function renderPatients() {
   const wrap = document.createElement("div");
   wrap.innerHTML = `
     <div class="page-header">
-      <div><h1>Patienten</h1><div class="page-sub">${state.patients.length} Patienten · Matrixansicht van de Patientenakte, klik een cel voor details</div></div>
+      <div><h1>Patienten</h1><div class="page-sub">${orgPatients().length} Patienten · Matrixansicht van de Patientenakte, klik een cel voor details</div></div>
       ${isAdmin() ? '<button class="btn primary" id="new-patient-btn">+ Neuer Patient</button>' : ""}
     </div>`;
 
@@ -1026,12 +1177,13 @@ function renderPatients() {
         .join("")}
     </tr>`;
 
-  const bodyRows = state.patients
+  const orgItemsCache = orgItems();
+  const bodyRows = orgPatients()
     .map((p) => {
       const cells = [...akteLabels, ...verwLabels]
         .map((label, i) => {
           const cat = i < akteLabels.length ? "akte" : "verwaltung";
-          const item = state.items.find((it) => it.linkType === "patient" && it.linkId === p.id && it.category === cat && it.label === label);
+          const item = orgItemsCache.find((it) => it.linkType === "patient" && it.linkId === p.id && it.category === cat && it.label === label);
           if (!item) return `<td class="cell ${cat === "akte" ? "col-akte" : "col-verwaltung"}">–</td>`;
           const d = cellDisplay(item);
           const titleTxt = `${item.label} · ${statusLabel(item.status)} · Frist ${fmtDate(item.deadline)} · ${item.assignees.map(userLabel).join(", ")}`;
@@ -1114,7 +1266,8 @@ function renderPersonal() {
   wrap.appendChild(tabBar);
 
   const labels = ITEM_DEFS.personal;
-  const staffInCat = state.staff.filter((s) => s.category === staffTab);
+  const staffInCat = orgStaff().filter((s) => s.category === staffTab);
+  const orgItemsCache = orgItems();
 
   const matrixWrap = document.createElement("div");
   matrixWrap.className = "matrix-scroll";
@@ -1124,7 +1277,7 @@ function renderPersonal() {
     .map((s) => {
       const cells = labels
         .map((label) => {
-          const item = state.items.find((it) => it.linkType === "staff" && it.linkId === s.id && it.category === "personal" && it.label === label);
+          const item = orgItemsCache.find((it) => it.linkType === "staff" && it.linkId === s.id && it.category === "personal" && it.label === label);
           if (!item) return `<td class="cell col-akte">–</td>`;
           const d = cellDisplay(item);
           const titleTxt = `${item.label} · ${statusLabel(item.status)} · Frist ${fmtDate(item.deadline)} · ${item.assignees.map(userLabel).join(", ")}`;
@@ -1180,7 +1333,7 @@ function renderPersonal() {
 function renderSimpleDocPage(categoryId) {
   const wrap = document.createElement("div");
   const cat = state.categories.find((c) => c.id === categoryId);
-  const items = state.items.filter((it) => it.category === categoryId && it.linkType === "org");
+  const items = orgItems().filter((it) => it.category === categoryId && it.linkType === "org");
   const doneCount = items.filter((it) => it.status === "done").length;
   // Het Hygienehandbuch heeft hoofdstukken met subpunten (uit het bronwerkboek);
   // QM is een platte lijst. Alleen bij nesting hoofdstukken vet + subpunten inspringen,
@@ -1283,7 +1436,7 @@ function renderSimpleDocPage(categoryId) {
 
 function renderAdmin() {
   const wrap = document.createElement("div");
-  wrap.innerHTML = `<div class="page-header"><div><h1>Beheer</h1><div class="page-sub">Gebruikers van deze Pflegedienst (demo)</div></div></div>`;
+  wrap.innerHTML = `<div class="page-header"><div><h1>Beheer</h1><div class="page-sub">Benutzer und Organisationen</div></div></div>`;
   const tableWrap = document.createElement("div");
   tableWrap.className = "table-wrap";
   tableWrap.innerHTML = `
@@ -1292,7 +1445,7 @@ function renderAdmin() {
       <tbody>
         ${state.users
           .map((u) => {
-            const openCount = state.items.filter((i) => i.assignees.includes(u.id) && i.status !== "done").length;
+            const openCount = orgItems().filter((i) => i.assignees.includes(u.id) && i.status !== "done").length;
             return `<tr>
               <td>${u.name}</td>
               <td><span class="role-badge ${u.role === "admin" ? "admin" : ""}">${u.roleLabel}</span></td>
@@ -1306,8 +1459,54 @@ function renderAdmin() {
   wrap.appendChild(tableWrap);
   const note = document.createElement("p");
   note.style.cssText = "color:var(--ink-muted);font-size:13px;margin-top:16px;max-width:60ch;";
-  note.textContent = "In dit prototype is gebruikersbeheer read-only (vaste demo-accounts). Personeelsdossiers beheer je via de pagina 'Personal'.";
+  note.textContent = "Alle Benutzer sind Administrator und dürfen alles ändern; ein Passwort gibt es nicht. Der Name dient der Nachvollziehbarkeit, nicht der Zugangskontrolle.";
   wrap.appendChild(note);
+
+  // Organisaties beheren — toevoegen, hernoemen, kleur kiezen, op inactief zetten.
+  const orgHeader = document.createElement("div");
+  orgHeader.className = "page-header";
+  orgHeader.style.marginTop = "36px";
+  orgHeader.innerHTML = `
+    <div><h1 style="font-size:19px;">Organisationen</h1><div class="page-sub">${state.organizations.length} Pflegedienste · Farbe und Name erscheinen oben im Balken</div></div>
+    <button class="btn primary" id="org-add">+ Neue Organisation</button>
+  `;
+  wrap.appendChild(orgHeader);
+  orgHeader.querySelector("#org-add").addEventListener("click", () => {
+    modalState = { kind: "org-new" };
+    render();
+  });
+
+  const orgTable = document.createElement("div");
+  orgTable.className = "table-wrap";
+  orgTable.innerHTML = `
+    <table>
+      <thead><tr><th>Organisation</th><th>Farbe</th><th>Patienten</th><th>Offene Punkte</th><th>Nächste Kontrolle</th><th>Status</th></tr></thead>
+      <tbody>
+        ${state.organizations
+          .map((o) => {
+            const items = state.items.filter((i) => i.orgId === o.id);
+            const info = pflegedienstInfo(o);
+            const late = info.daysLeft < 0;
+            return `<tr data-edit-org="${o.id}">
+              <td>${orgSwatchHtml(o, "small")} <strong>${o.name}</strong>${o.id === state.currentOrgId ? ' <span class="org-current">aktuell</span>' : ""}</td>
+              <td>${orgColor(o.color).label}</td>
+              <td>${state.patients.filter((p) => p.orgId === o.id).length}</td>
+              <td>${items.filter((i) => !isFullyDone(i)).length}</td>
+              <td><span class="deadline-badge ${late ? "overdue" : ""}">${fmtDate(info.nextDate)}${late ? " · überfällig" : ""}</span></td>
+              <td>${o.active === false ? '<span class="status-pill status-open">Inaktiv</span>' : '<span class="status-pill status-done">Aktiv</span>'}</td>
+            </tr>`;
+          })
+          .join("")}
+      </tbody>
+    </table>
+  `;
+  wrap.appendChild(orgTable);
+  orgTable.querySelectorAll("[data-edit-org]").forEach((row) =>
+    row.addEventListener("click", () => {
+      modalState = { kind: "org-edit", id: row.dataset.editOrg };
+      render();
+    })
+  );
   return wrap;
 }
 
@@ -1571,10 +1770,10 @@ function nextAdhocId() {
 
 function addChecklistItemDefinition(categoryId, label) {
   const cat = state.categories.find((c) => c.id === categoryId);
-  const targets = cat.scope === "patient" ? state.patients.map((p) => p.id) : cat.scope === "staff" ? state.staff.map((s) => s.id) : [null];
+  const targets = cat.scope === "patient" ? orgPatients().map((p) => p.id) : cat.scope === "staff" ? orgStaff().map((s) => s.id) : [null];
   const linkType = cat.scope === "patient" ? "patient" : cat.scope === "staff" ? "staff" : "org";
   targets.forEach((linkId) => {
-    state.items.push(blankChecklistItem(nextAdhocId(), categoryId, label, linkType, linkId, state.currentUserId));
+    state.items.push(blankChecklistItem(nextAdhocId(), categoryId, label, linkType, linkId, state.currentUserId, state.currentOrgId));
   });
   saveState();
 }
@@ -1594,6 +1793,8 @@ function renderModalPanel() {
   const panel = document.createElement("div");
   panel.className = "panel open";
   if (modalState.kind === "item-new") panel.innerHTML = newItemFormHtml();
+  else if (modalState.kind === "org-new" || modalState.kind === "org-edit")
+    panel.innerHTML = orgFormHtml(modalState.kind === "org-edit" ? state.organizations.find((o) => o.id === modalState.id) : null);
   else if (modalState.kind === "patient-new" || modalState.kind === "patient-edit") panel.innerHTML = patientFormHtml(modalState.kind === "patient-edit" ? state.patients.find((p) => p.id === modalState.id) : null);
   else if (modalState.kind === "staff-new" || modalState.kind === "staff-edit") panel.innerHTML = staffFormHtml(modalState.kind === "staff-edit" ? state.staff.find((s) => s.id === modalState.id) : null);
   else if (modalState.kind === "pdf-export") panel.innerHTML = pdfExportFormHtml();
@@ -1605,6 +1806,39 @@ function renderModalPanel() {
       modalState = null;
       render();
     });
+
+  const ofSubmit = panel.querySelector("#of-submit");
+  if (ofSubmit) {
+    ofSubmit.addEventListener("click", () => {
+      const name = panel.querySelector("#of-name").value.trim();
+      if (!name) return;
+      const color = (panel.querySelector('input[name="of-color"]:checked') || {}).value || ORG_COLORS[0].id;
+      const createdAt = panel.querySelector("#of-created").value || todayStr();
+      const auditIntervalMonths = parseInt(panel.querySelector("#of-interval").value, 10) || 9;
+      if (modalState.kind === "org-edit") {
+        const org = state.organizations.find((o) => o.id === modalState.id);
+        org.name = name;
+        org.color = color;
+        org.createdAt = createdAt;
+        org.auditIntervalMonths = auditIntervalMonths;
+        org.active = panel.querySelector("#of-active").value === "true";
+        // Jezelf op inactief zetten terwijl je erin werkt: dan eruit.
+        if (org.active === false && org.id === state.currentOrgId) state.currentOrgId = null;
+        saveState();
+        modalState = null;
+        render();
+      } else {
+        const id = "org" + Date.now().toString(36);
+        state.organizations.push({ id, name, color, active: true, createdAt, auditIntervalMonths });
+        // Meteen bruikbaar: de nieuwe dienst krijgt het volledige QM- en
+        // Hygienehandbuch, want dat is voor elke Pflegedienst hetzelfde.
+        state.items.push(...createOrgChecklistItems(id));
+        saveState();
+        modalState = null;
+        switchOrg(id);
+      }
+    });
+  }
 
   const pfSubmit = panel.querySelector("#pf-submit");
   if (pfSubmit) {
@@ -1623,8 +1857,8 @@ function renderModalPanel() {
         p.sgbV = sgbV;
       } else {
         const id = "p" + Date.now().toString(36);
-        state.patients.push({ id, name, pflegegrad, active, sgbV });
-        state.items.push(...createPatientChecklistItems(id, state.currentUserId));
+        state.patients.push({ orgId: state.currentOrgId, id, name, pflegegrad, active, sgbV });
+        state.items.push(...createPatientChecklistItems(id, state.currentUserId, state.currentOrgId));
       }
       saveState();
       modalState = null;
@@ -1646,8 +1880,8 @@ function renderModalPanel() {
         s.active = active;
       } else {
         const id = "s" + Date.now().toString(36);
-        state.staff.push({ id, name, category, active });
-        state.items.push(...createStaffChecklistItems(id, state.currentUserId));
+        state.staff.push({ orgId: state.currentOrgId, id, name, category, active });
+        state.items.push(...createStaffChecklistItems(id, state.currentUserId, state.currentOrgId));
         staffTab = category;
       }
       saveState();
@@ -1672,7 +1906,7 @@ function renderModalPanel() {
   if (pdfScope) {
     pdfScope.addEventListener("change", (e) => {
       modalState.scope = e.target.value;
-      modalState.scopeValue = modalState.scope === "patient" ? (state.patients[0] ? state.patients[0].id : "") : modalState.scope === "category" ? "akte" : "";
+      modalState.scopeValue = modalState.scope === "patient" ? (orgPatients()[0] ? orgPatients()[0].id : "") : modalState.scope === "category" ? "akte" : "";
       render();
     });
   }
@@ -1692,6 +1926,65 @@ function renderModalPanel() {
   }
 
   return frag;
+}
+
+function orgFormHtml(existing) {
+  const isEdit = !!existing;
+  const used = state.organizations.filter((o) => !isEdit || o.id !== existing.id).map((o) => o.color);
+  // Een nog ongebruikte kleur voorstellen, zodat twee diensten niet per ongeluk
+  // dezelfde balk krijgen — dan werkt het hele kleurverschil niet meer.
+  const suggested = (ORG_COLORS.find((c) => !used.includes(c.id)) || ORG_COLORS[0]).id;
+  const current = isEdit ? existing.color : suggested;
+  return `
+    <div class="panel-header">
+      <div>
+        <h2>${isEdit ? "Organisation bearbeiten" : "Neue Organisation"}</h2>
+        <div class="page-sub">${isEdit ? existing.name : "Startet mit dem vollständigen QM-Handbuch und Hygienehandbuch"}</div>
+      </div>
+      <button class="panel-close" id="modal-close">✕</button>
+    </div>
+    <div class="panel-body">
+      <div class="field-row">
+        <span class="field-label">Name des Pflegedienstes</span>
+        <input type="text" id="of-name" value="${isEdit ? existing.name : ""}" style="${INPUT_STYLE}" placeholder="z. B. Pflegedienst Morgenstern" />
+      </div>
+      <div class="field-row col">
+        <span class="field-label">Farbe im Kopfbalken</span>
+        <div class="org-color-picker">
+          ${ORG_COLORS.map(
+            (c) => `<label class="org-color-option ${used.includes(c.id) ? "taken" : ""}" title="${c.label}${used.includes(c.id) ? " — bereits vergeben" : ""}">
+              <input type="radio" name="of-color" value="${c.id}" ${c.id === current ? "checked" : ""} />
+              <span class="org-color-chip" style="background:${c.bg}"></span>
+              <span class="org-color-label">${c.label}${used.includes(c.id) ? " ·" : ""}</span>
+            </label>`
+          ).join("")}
+        </div>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Letzte MD-Prüfung</span>
+        <input type="date" id="of-created" value="${isEdit ? existing.createdAt : todayStr()}" style="${INPUT_STYLE}" />
+      </div>
+      <div class="field-row">
+        <span class="field-label">Intervall bis zur nächsten Kontrolle</span>
+        <select id="of-interval" style="${INPUT_STYLE}">
+          ${[6, 9, 12, 24].map((m) => `<option value="${m}" ${(isEdit ? existing.auditIntervalMonths : 9) === m ? "selected" : ""}>${m} Monate</option>`).join("")}
+        </select>
+      </div>
+      ${
+        isEdit
+          ? `<div class="field-row">
+               <span class="field-label">Status</span>
+               <select id="of-active" style="${INPUT_STYLE}">
+                 <option value="true" ${existing.active !== false ? "selected" : ""}>Aktiv</option>
+                 <option value="false" ${existing.active === false ? "selected" : ""}>Inaktiv — nicht mehr auswählbar</option>
+               </select>
+             </div>
+             <p class="picker-footnote">Organisationen werden nie gelöscht, nur auf inaktiv gesetzt: die Historie muss nachvollziehbar bleiben.</p>`
+          : ""
+      }
+      <button class="btn primary" id="of-submit">${isEdit ? "Speichern" : "Organisation anlegen"}</button>
+    </div>
+  `;
 }
 
 function patientFormHtml(existing) {
@@ -1801,11 +2094,11 @@ function buildPrintSelection(scope, scopeValue) {
   let items;
   let title = "MD-READY – Gesamtübersicht Patientenakten";
   if (scope === "patient") {
-    const p = state.patients.find((x) => x.id === scopeValue);
-    items = state.items.filter((it) => it.linkType === "patient" && it.linkId === scopeValue);
+    const p = orgPatients().find((x) => x.id === scopeValue);
+    items = orgItems().filter((it) => it.linkType === "patient" && it.linkId === scopeValue);
     title = `MD-READY – Patientenakte: ${p ? p.name : ""}`;
   } else if (scope === "category") {
-    items = state.items.filter((it) => it.category === scopeValue);
+    items = orgItems().filter((it) => it.category === scopeValue);
     title = `MD-READY – Übersicht: ${categoryLabel(scopeValue)}`;
   } else {
     items = patientScopedItems();
@@ -1850,7 +2143,7 @@ function pdfExportFormHtml() {
       </div>
       ${
         scope === "patient"
-          ? `<div class="field-row"><span class="field-label">Patiënt</span><select id="pdf-scopevalue" style="${INPUT_STYLE}">${state.patients.map((p) => `<option value="${p.id}" ${scopeValue === p.id ? "selected" : ""}>${p.name}</option>`).join("")}</select></div>`
+          ? `<div class="field-row"><span class="field-label">Patiënt</span><select id="pdf-scopevalue" style="${INPUT_STYLE}">${orgPatients().map((p) => `<option value="${p.id}" ${scopeValue === p.id ? "selected" : ""}>${p.name}</option>`).join("")}</select></div>`
           : ""
       }
       ${
