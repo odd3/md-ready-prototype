@@ -289,7 +289,12 @@ async function boot() {
       }
     }
   }
-  if (storageMode === "none" && localStorage.getItem(MODE_KEY) === "local") useLocalStorageMode();
+  // Geen vraag meer bij het opstarten. De netwerkmap was bedoeld voor een
+  // installatie op een share; nu draait dit op Vercel en komt er een database
+  // achter. Tot die er is slaat de browser het op — dat staat in de zijbalk.
+  // De mapkeuze blijft bereikbaar via "Ordner wählen" onderin, maar niemand
+  // wordt er nog mee begroet.
+  if (storageMode === "none") useLocalStorageMode();
   render();
 }
 
@@ -501,20 +506,20 @@ function renderStorageSetup() {
           <div class="tenant-name">Einrichtung</div>
         </div>
       </div>
-      <h1>Wo liegen die Daten?</h1>
-      <p class="picker-sub">Die Anwendung schreibt in einen Ordner auf Ihrem Netzlaufwerk. Die Daten verlassen das Haus nicht.</p>
+      <h1>Daten in einen Ordner schreiben?</h1>
+      <p class="picker-sub">Optional: in einen Ordner im Netzlaufwerk schreiben, statt in diesen Browser. Nur Chrome und Edge, und immer nur eine Person gleichzeitig.</p>
       ${storageError ? `<div class="storage-warning">${storageError}</div>` : ""}
       ${reason ? `<div class="storage-warning">${reason}</div>` : ""}
       <div class="storage-choices">
         ${
           reason
             ? ""
-            : `<button class="btn primary" id="pick-folder">${savedHandleName ? `Mit Ordner „${savedHandleName}" verbinden` : "Ordner im Netzlaufwerk wählen"}</button>`
+            : `<button class="btn primary" id="pick-folder">${savedHandleName ? `Mit Ordner „${savedHandleName}" verbinden` : "Ordner wählen"}</button>`
         }
         ${savedHandleName && !reason ? '<button class="btn" id="pick-other">Anderen Ordner wählen</button>' : ""}
-        <button class="btn" id="use-local">Nur auf diesem Computer (Demo)</button>
+        <button class="btn" id="use-local">Zurück — im Browser speichern</button>
       </div>
-      <p class="picker-footnote">„Nur auf diesem Computer" ist zum Ausprobieren: die Daten bleiben in diesem Browser und niemand sonst sieht sie.</p>
+      <p class="picker-footnote">Ein Ordner lohnt sich nur, wenn alle Beteiligten am selben Netzwerk arbeiten und immer nur eine Person gleichzeitig. Für mehrere Personen online kommt eine Datenbank dahinter; bis dahin speichert der Browser.</p>
     </div>
   `;
   const connect = async (chooseNew) => {
@@ -812,9 +817,11 @@ function renderSidebar() {
         <button class="theme-toggle" id="sign-off">Abmelden${storageMode === "file" ? " & freigeben" : ""}</button>
       </div>
       <div class="storage-badge">
-        <span class="sb-where">${storageMode === "file" ? "📁 " + storageDirName : "💻 Nur dieser Computer"}</span>
+        <span class="sb-where" title="${storageMode === "file" ? "Alle Daten liegen in diesem Ordner." : "Prototyp: Ihre Eintragungen bleiben in diesem Browser und sind für Kollegen nicht sichtbar."}">
+          ${storageMode === "file" ? "📁 " + storageDirName : "💻 Nur in diesem Browser"}
+        </span>
         ${saveIndicatorHtml()}
-        <button class="linklike" id="change-storage">Ordner wechseln</button>
+        <button class="linklike" id="change-storage">${storageMode === "file" ? "Ordner wechseln" : "Ordner wählen …"}</button>
       </div>
       <button class="theme-toggle" id="theme-toggle">Hell / Dunkel</button>
       <button class="theme-toggle" id="reset-demo">Demo zurücksetzen</button>
